@@ -5,6 +5,7 @@ import ConfirmationService from 'primevue/confirmationservice'
 import ToastService from 'primevue/toastservice'
 import Tooltip from 'primevue/tooltip'
 import { app } from 'scripts/comfyAPI'
+import { installGraphDropHandler } from 'scripts/graphDrop'
 import { createApp } from 'vue'
 import App from './App.vue'
 import { i18n } from './i18n'
@@ -44,6 +45,9 @@ function createVueApp(rootContainer: string | HTMLElement) {
 app.registerExtension({
   name: 'Comfy.ImageBrowsing',
   setup() {
+    // Allow dragging items from the explorer onto the ComfyUI graph.
+    installGraphDropHandler()
+
     const container = document.createElement('div')
     container.id = 'comfyui-image-browsing'
     document.body.appendChild(container)

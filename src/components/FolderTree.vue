@@ -109,6 +109,8 @@ export interface TreeNode {
 
 // Local storage for file counts cache
 const FILE_COUNTS_STORAGE_KEY = 'comfyui-image-browsing-folder-counts'
+// Local storage for "hasSubfolders" cache (helps hide expand arrows for true leaf folders)
+const SUBFOLDER_INFO_STORAGE_KEY = 'comfyui-image-browsing-has-subfolders'
 
 const loadCachedCounts = (): Record<string, number> => {
   try {
@@ -128,6 +130,25 @@ const saveCachedCounts = (counts: Record<string, number>) => {
 }
 
 const cachedFileCounts = ref<Record<string, number>>(loadCachedCounts())
+
+const loadCachedSubfolders = (): Record<string, boolean> => {
+  try {
+    const cached = localStorage.getItem(SUBFOLDER_INFO_STORAGE_KEY)
+    return cached ? JSON.parse(cached) : {}
+  } catch {
+    return {}
+  }
+}
+
+const saveCachedSubfolders = (info: Record<string, boolean>) => {
+  try {
+    localStorage.setItem(SUBFOLDER_INFO_STORAGE_KEY, JSON.stringify(info))
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+const cachedHasSubfolders = ref<Record<string, boolean>>(loadCachedSubfolders())
 
 const props = defineProps<{
   selectedPath: string
@@ -187,7 +208,8 @@ const loadChildren = async (node: TreeNode) => {
           children: [],
           loaded: false,  // Not loaded yet
           fileCount: cachedFileCounts.value[fullname],  // Use cached count if available
-          hasSubfolders: undefined,  // Unknown until loaded or fetched
+          // Use cached subfolder info if available, otherwise keep unknown until fetched.
+          hasSubfolders: cachedHasSubfolders.value[fullname],
         } as TreeNode
       })
       .sort((a: TreeNode, b: TreeNode) => a.name.localeCompare(b.name))
@@ -224,6 +246,8 @@ const fetchFolderCounts = async (folderPath: string) => {
       
       // Update hasSubfolders info
       if (Object.keys(subfolderInfo).length > 0) {
+        Object.assign(cachedHasSubfolders.value, subfolderInfo)
+        saveCachedSubfolders(cachedHasSubfolders.value)
         updateNodeHasSubfolders(rootNode.value, subfolderInfo)
       }
     }
@@ -457,6 +481,8 @@ const deleteFolder = (node: TreeNode) => {
 
 const onDragOver = (event: DragEvent, node: TreeNode) => {
   event.preventDefault()
+  event.stopPropagation()
+  ;(event as any).stopImmediatePropagation?.()
   dragOverPath.value = node.fullname
 }
 
@@ -466,6 +492,8 @@ const onDragLeave = () => {
 
 const onDrop = async (event: DragEvent, node: TreeNode) => {
   event.preventDefault()
+  event.stopPropagation()
+  ;(event as any).stopImmediatePropagation?.()
   dragOverPath.value = null
   
   // Get dragged files from dataTransfer
@@ -476,9 +504,10 @@ const onDrop = async (event: DragEvent, node: TreeNode) => {
     const files = JSON.parse(filesJson)
     if (files && files.length > 0) {
       emit('moveFiles', files, node.fullname)
-      
-      // Reload target folder
-      await reloadNode(node)
+      // IMPORTANT: Don't immediately reload here.
+      // The actual move happens asynchronously in the parent (server-side). Reloading now can
+      // race with filesystem operations and leave the node in a "loaded but empty" state.
+      // The parent refresh will take care of rebuilding the tree.
     }
   } catch (err) {
     console.error('Failed to parse drop data:', err)
@@ -551,13 +580,18 @@ watch(() => cacheStatus.value.folder_counts, (newCounts) => {
 const refreshTree = async () => {
   rootNode.value.loaded = false
   rootNode.value.children = []
+  // Reset expansion to a safe baseline to avoid stale expanded paths after move/delete.
+  expandedPaths.value = new Set(['/output'])
   await loadChildren(rootNode.value)
+  // Refresh counts + hasSubfolders in background
+  fetchFolderCounts('/output')
 }
 
 const refreshNode = async (path: string) => {
   const node = findNode(rootNode.value, path)
   if (node) {
     await reloadNode(node)
+    fetchFolderCounts(path)
   }
 }
 

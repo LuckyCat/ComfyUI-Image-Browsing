@@ -420,7 +420,7 @@ const onTreeSelect = async (path: string) => {
 
 const onRefresh = async () => {
   await refresh()
-  folderTreeRef.value?.refreshTree()
+  await folderTreeRef.value?.refreshTree()
 }
 
 const nonContextMenu = ($event: MouseEvent) => {
@@ -438,12 +438,38 @@ const vFocus = {
 const onItemDragStart = (event: DragEvent, item: DirectoryItem) => {
   // If this item is selected, drag all selected items
   // Otherwise, drag just this item
-  const itemsToMove = selectedItems.value.some(i => i.fullname === item.fullname)
-    ? selectedItems.value.map(i => i.fullname)
-    : [item.fullname]
-  
-  event.dataTransfer?.setData('application/json', JSON.stringify(itemsToMove))
-  event.dataTransfer!.effectAllowed = 'move'
+  const draggedItems = selectedItems.value.some((i) => i.fullname === item.fullname)
+    ? selectedItems.value
+    : [item]
+
+  // Used by our folder-tree move/drop.
+  event.dataTransfer?.setData(
+    'application/json',
+    JSON.stringify(draggedItems.map((i) => i.fullname)),
+  )
+
+  // Used by ComfyUI canvas drop integration (LoadImage/LoadVideo / open workflow on empty canvas)
+  event.dataTransfer?.setData(
+    'application/x-comfyui-image-browsing',
+    JSON.stringify({
+      source: 'ComfyUI-Image-Browsing',
+      items: draggedItems.map((i) => ({
+        fullname: i.fullname,
+        name: i.name,
+        type: i.type,
+      })),
+    }),
+  )
+
+  // Moving inside output is a move; dropping on the graph is effectively a copy/upload.
+  event.dataTransfer!.effectAllowed = 'copyMove'
+
+  // Prevent browser default URL payloads (e.g. dragging <img>) from triggering ComfyUI's default drop handler.
+  try {
+    event.dataTransfer?.setData('text/uri-list', '')
+    event.dataTransfer?.setData('text/plain', '')
+  } catch {}
+
 }
 
 const onMoveFiles = async (files: string[], targetFolder: string) => {
@@ -465,7 +491,8 @@ const onMoveFiles = async (files: string[], targetFolder: string) => {
     
     // Refresh current view
     await refresh()
-    folderTreeRef.value?.refreshTree()
+    // Await tree refresh to avoid leaving the tree in a half-reset state.
+    await folderTreeRef.value?.refreshTree()
   } catch (err: any) {
     toast.add({
       severity: 'error',
