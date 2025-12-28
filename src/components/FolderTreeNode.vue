@@ -119,12 +119,9 @@ const isCached = computed(() => {
 // 2. Node has hasSubfolders explicitly set to true, OR
 // 3. Node is not loaded yet (we don't know if it has subfolders)
 const showExpandIcon = computed(() => {
-  if (hasChildren.value) return true
-  if (props.node.hasSubfolders === true) return true
-  if (props.node.hasSubfolders === false) return false
-  // Not loaded yet - show icon so user can try to expand
-  if (!props.node.loaded) return true
-  return false
+  // Show arrow only when the node is known to have subfolders
+  // (either already loaded children, or backend-provided hasSubfolders flag).
+  return hasChildren.value || props.node.hasSubfolders === true
 })
 
 const onSelect = () => {

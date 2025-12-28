@@ -54,6 +54,26 @@
             @click="onRefresh"
           ></Button>
 
+          <!-- View Mode Toggle (list mode is lighter for very large folders) -->
+          <Button
+            class="shrink-0"
+            icon="pi pi-th-large"
+            :text="true"
+            :rounded="true"
+            :severity="viewMode === 'grid' ? 'primary' : 'secondary'"
+            @click="viewMode = 'grid'"
+            v-tooltip.bottom="'Grid view'"
+          ></Button>
+          <Button
+            class="shrink-0"
+            icon="pi pi-list"
+            :text="true"
+            :rounded="true"
+            :severity="viewMode === 'list' ? 'primary' : 'secondary'"
+            @click="viewMode = 'list'"
+            v-tooltip.bottom="'List view'"
+          ></Button>
+
           <div
             :class="[
               'flex h-10 flex-1 basis-10 items-center rounded-lg px-2 py-1',
@@ -117,9 +137,10 @@
         @click="clearSelected"
         @contextmenu.stop="folderContext"
       >
-        <ResponseScroll :items="folderItems" :item-size="itemSize" class="h-full">
+        <ResponseScroll :items="folderItems" :item-size="scrollItemSize" class="h-full">
           <template #item="{ item }">
             <div
+              v-if="viewMode === 'grid'"
               class="grid justify-center"
               :style="{ gridTemplateColumns: `repeat(auto-fit, ${itemSize}px)` }"
             >
@@ -171,21 +192,36 @@
                         ></path>
                       </svg>
                     </div>
-                    <LazyImage
-                      v-else-if="rowItem.type === 'image'"
-                      class="h-full w-full"
-                      :src="getPreviewUrl(rowItem)"
-                      alt="preview"
-                    />
+                    <div v-else-if="rowItem.type === 'image'" class="h-full w-full">
+                      <LazyImage
+                        v-if="thumbnailsEnabled"
+                        class="h-full w-full"
+                        :src="getPreviewUrl(rowItem)"
+                        alt="preview"
+                      />
+                      <div
+                        v-else
+                        class="flex h-full w-full items-center justify-center opacity-50"
+                      >
+                        <i class="pi pi-image text-2xl"></i>
+                      </div>
+                    </div>
                     <div
                       v-else-if="rowItem.type === 'video'"
                       class="relative h-full w-full"
                     >
                       <LazyImage
+                        v-if="thumbnailsEnabled"
                         class="h-full w-full"
                         :src="getPreviewUrl(rowItem)"
                         alt="video preview"
                       />
+                      <div
+                        v-else
+                        class="flex h-full w-full items-center justify-center opacity-50"
+                      >
+                        <i class="pi pi-video text-2xl"></i>
+                      </div>
                       <!-- Video play icon overlay -->
                       <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
                         <div class="bg-black/50 rounded-full p-2">
@@ -274,6 +310,77 @@
               </div>
               <div class="col-span-full"></div>
             </div>
+
+            <!-- List view: filenames are usable immediately; previews load lazily -->
+            <div v-else class="flex w-full flex-col px-2">
+              <div
+                v-for="rowItem in item"
+                :key="rowItem.name"
+                class="py-0.5"
+              >
+                <div
+                  :class="[
+                    'flex w-full items-center gap-3 rounded-lg px-2 py-1',
+                    'hover:bg-gray-300 dark:hover:bg-gray-800',
+                    selectedItemsName.includes(rowItem.name)
+                      ? 'bg-gray-300 dark:bg-gray-800'
+                      : '',
+                  ]"
+                  draggable="true"
+                  @dragstart="(e) => onItemDragStart(e, rowItem)"
+                  @dragend.stop="rowItem.onDragEnd"
+                  @click.stop="rowItem.onClick"
+                  @dblclick.stop="rowItem.onDbClick"
+                  @contextmenu.stop="rowItem.onContextMenu"
+                >
+                  <div
+                    class="relative overflow-hidden rounded-lg bg-gray-200 dark:bg-gray-900 flex items-center justify-center"
+                    :style="{ width: `${listThumbSize}px`, height: `${listThumbSize}px` }"
+                  >
+                    <template v-if="rowItem.type === 'folder'">
+                      <i class="pi pi-folder text-xl opacity-80"></i>
+                    </template>
+                    <template v-else-if="rowItem.type === 'image'">
+                      <LazyImage
+                        v-if="thumbnailsEnabled"
+                        class="h-full w-full"
+                        :src="getPreviewUrl(rowItem)"
+                        alt="preview"
+                      />
+                      <i v-else class="pi pi-image text-xl opacity-60"></i>
+                    </template>
+                    <template v-else-if="rowItem.type === 'video'">
+                      <LazyImage
+                        v-if="thumbnailsEnabled"
+                        class="h-full w-full"
+                        :src="getPreviewUrl(rowItem)"
+                        alt="video preview"
+                      />
+                      <i v-else class="pi pi-video text-xl opacity-60"></i>
+                      <div
+                        v-if="thumbnailsEnabled"
+                        class="absolute inset-0 flex items-center justify-center pointer-events-none"
+                      >
+                        <div class="bg-black/50 rounded-full p-1.5">
+                          <i class="pi pi-play text-white text-xs"></i>
+                        </div>
+                      </div>
+                    </template>
+                    <template v-else-if="rowItem.type === 'audio'">
+                      <i class="pi pi-volume-up text-xl opacity-70"></i>
+                    </template>
+                    <template v-else>
+                      <i class="pi pi-file text-xl opacity-70"></i>
+                    </template>
+                  </div>
+
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate text-sm">{{ rowItem.name }}</div>
+                    <div class="truncate text-xs opacity-60">{{ rowItem.type }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </template>
 
           <template #empty>
@@ -351,7 +458,7 @@ import ContextMenu from 'primevue/contextmenu'
 import InputText from 'primevue/inputtext'
 import Tooltip from 'primevue/tooltip'
 import { DirectoryItem } from 'types/typings'
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 const vTooltip = Tooltip
 
@@ -360,6 +467,12 @@ const { toast } = useToast()
 const container = ref<HTMLElement | null>(null)
 const folderTreeRef = ref<InstanceType<typeof FolderTree> | null>(null)
 const showSidebar = ref(true)
+
+// Grid is nice, but list mode is MUCH lighter on huge folders
+const viewMode = ref<'grid' | 'list'>('grid')
+
+// Defer thumbnails so filenames + interactions are instant
+const thumbnailsEnabled = ref(false)
 
 const {
   loading,
@@ -377,6 +490,19 @@ const {
 } = useExplorer()
 
 const { currentSize, thumbnailSize, folderSize, itemSize } = useThumbnailSize()
+
+const LIST_THUMB_SIZES: Record<string, number> = {
+  small: 56,
+  medium: 80,
+  large: 120,
+}
+
+const listThumbSize = computed(() => LIST_THUMB_SIZES[currentSize.value] ?? 56)
+const listRowHeight = computed(() => Math.max(48, listThumbSize.value + 12))
+
+const scrollItemSize = computed(() =>
+  viewMode.value === 'list' ? listRowHeight.value : itemSize.value,
+)
 
 const searchContent = ref('')
 
@@ -397,7 +523,64 @@ const folderItems = computed(() => {
   const filterItems = items.value.filter((item) => {
     return item.name.toLowerCase().includes(searchContent.value.toLowerCase())
   })
-  return chunk(filterItems, cols.value)
+  // In list mode we keep just 1 item per virtual row
+  return chunk(filterItems, viewMode.value === 'list' ? 1 : cols.value)
+})
+
+let thumbTimer: number | null = null
+let thumbIdle: number | null = null
+
+const scheduleEnableThumbnails = () => {
+  thumbnailsEnabled.value = false
+
+  if (thumbTimer != null) {
+    window.clearTimeout(thumbTimer)
+    thumbTimer = null
+  }
+
+  const w = window as any
+  if (thumbIdle != null && typeof w.cancelIdleCallback === 'function') {
+    w.cancelIdleCallback(thumbIdle)
+    thumbIdle = null
+  }
+
+  // Start thumbnail loading when the browser is idle (fallback to short delay)
+  if (typeof w.requestIdleCallback === 'function') {
+    thumbIdle = w.requestIdleCallback(
+      () => {
+        thumbnailsEnabled.value = true
+        thumbIdle = null
+      },
+      { timeout: 600 },
+    )
+  } else {
+    thumbTimer = window.setTimeout(() => {
+      thumbnailsEnabled.value = true
+      thumbTimer = null
+    }, 200)
+  }
+}
+
+watch(currentPath, scheduleEnableThumbnails, { immediate: true })
+
+watch(viewMode, () => {
+  // Switching views can trigger a lot of new previews; defer again
+  scheduleEnableThumbnails()
+})
+
+watch(
+  () => items.value.length,
+  (len) => {
+    // Auto-switch to list view on very large folders to avoid UI freezes
+  },
+)
+
+onBeforeUnmount(() => {
+  const w = window as any
+  if (thumbTimer != null) window.clearTimeout(thumbTimer)
+  if (thumbIdle != null && typeof w.cancelIdleCallback === 'function') {
+    w.cancelIdleCallback(thumbIdle)
+  }
 })
 
 const currentFolderName = computed(() => {
@@ -416,11 +599,13 @@ const getPreviewUrl = (item: DirectoryItem) => {
 const onTreeSelect = async (path: string) => {
   if (path === currentPath.value) return
   await navigateToPath(path)
+  scheduleEnableThumbnails()
 }
 
 const onRefresh = async () => {
   await refresh()
   folderTreeRef.value?.refreshTree()
+  scheduleEnableThumbnails()
 }
 
 const nonContextMenu = ($event: MouseEvent) => {

@@ -17,6 +17,17 @@ utils.download_web_distribution(version)
 from aiohttp import web
 from .py import services
 
+# ---------------------------------------------------------------------------
+# Thumbnail / preview generation can be CPU-heavy (PIL resize/encode, ffmpeg).
+# If we run it directly in the aiohttp event loop thread, it can freeze the
+# whole ComfyUI UI (same server instance). We offload work to a thread and
+# additionally limit concurrent thumbnail renders to keep the UI responsive.
+# ---------------------------------------------------------------------------
+
+# Default: keep it conservative. You can bump this if you have lots of CPU.
+_PREVIEW_CONCURRENCY = int(os.environ.get("COMFYUI_IMAGE_BROWSING_PREVIEW_CONCURRENCY", "2"))
+_preview_sem = asyncio.Semaphore(max(1, _PREVIEW_CONCURRENCY))
+
 
 routes = config.routes
 
@@ -41,15 +52,25 @@ async def scan_output_folder(request):
                     max_size = int(max_size_str)
                 except ValueError:
                     max_size = 128
-                
-                image_data = services.get_image_data(filepath, max_size)
+
+                # Fast 304 path (browser cache)
+                etag_value = f'"{services.get_cache_key(filepath, max_size)}"'
+                if request.headers.get("If-None-Match") == etag_value:
+                    return web.Response(status=304, headers={"ETag": etag_value})
+
+                # Offload thumbnail generation to a worker thread and limit
+                # concurrency so the ComfyUI UI stays responsive.
+                async with _preview_sem:
+                    image_data = await asyncio.to_thread(
+                        services.get_image_data, filepath, max_size
+                    )
                 # Add cache headers - cache for 1 hour in browser
                 return web.Response(
                     body=image_data.getvalue(), 
                     content_type="image/webp",
                     headers={
                         "Cache-Control": "public, max-age=3600",
-                        "ETag": f'"{services.get_cache_key(filepath, max_size)}"'
+                        "ETag": etag_value,
                     }
                 )
             
@@ -60,14 +81,21 @@ async def scan_output_folder(request):
                     max_size = int(max_size_str)
                 except ValueError:
                     max_size = 128
-                
-                image_data = services.get_image_data(filepath, max_size)
+
+                etag_value = f'"{services.get_cache_key(filepath, max_size)}"'
+                if request.headers.get("If-None-Match") == etag_value:
+                    return web.Response(status=304, headers={"ETag": etag_value})
+
+                async with _preview_sem:
+                    image_data = await asyncio.to_thread(
+                        services.get_image_data, filepath, max_size
+                    )
                 return web.Response(
                     body=image_data.getvalue(), 
                     content_type="image/webp",
                     headers={
                         "Cache-Control": "public, max-age=3600",
-                        "ETag": f'"{services.get_cache_key(filepath, max_size)}"'
+                        "ETag": etag_value,
                     }
                 )
 
