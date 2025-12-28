@@ -241,7 +241,7 @@ async def set_cache_config(request):
     """Set cache configuration"""
     try:
         data = await request.json()
-        max_size_gb = data.get("max_size_gb", 20.0)
+        max_size_gb = data.get("max_size_gb", 1.0)
         
         result = services.set_cache_max_size(max_size_gb)
         return web.json_response({"success": True, "data": result})

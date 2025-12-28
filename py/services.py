@@ -46,7 +46,7 @@ class DiskCache:
     """
     
     CONFIG_FILE = "cache_config.json"
-    DEFAULT_MAX_SIZE_GB = 20.0
+    DEFAULT_MAX_SIZE_GB = 1.0
     
     def __init__(self, cache_dir: str):
         self.cache_dir = cache_dir
@@ -368,45 +368,65 @@ def get_folder_counts(folder_path: str) -> dict:
     Returns dict with:
       - 'counts': folder paths as keys and file counts as values
       - 'hasSubfolders': folder paths as keys and boolean as values
+
+    Notes:
+      * We always return hasSubfolders for immediate subfolders (even when file
+        counts are cached) so the UI can reliably hide/show the expand arrow.
+      * Determining hasSubfolders is done with a cheap early-exit scandir that
+        only looks for directories.
     """
+
+    def _has_any_subfolder(dir_path: str) -> bool:
+        try:
+            with os.scandir(dir_path) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir():
+                            return True
+                    except OSError:
+                        continue
+        except OSError:
+            return False
+        return False
+
     real_path = utils.get_real_output_filepath(folder_path)
-    counts = {}
-    has_subfolders = {}
-    
+    counts: dict[str, int] = {}
+    has_subfolders: dict[str, bool] = {}
+
     try:
         # First scan the folder to get its contents
         items = scan_directory_items(real_path)
-        
-        # Count files in this folder
+
+        # Count media files in this folder
         file_count = sum(1 for item in items if item["type"] != "folder")
         folder_items = [item for item in items if item["type"] == "folder"]
-        
+
         counts[folder_path] = file_count
         has_subfolders[folder_path] = len(folder_items) > 0
-        
-        # Get counts for subfolders
+
+        # Get counts + hasSubfolders for immediate subfolders
         for item in folder_items:
             subfolder_path = f"{folder_path}/{item['name']}"
             subfolder_real = os.path.join(real_path, item["name"])
-            
-            # Check cached count first
+
+            # Always compute hasSubfolders (fast)
+            has_subfolders[subfolder_path] = _has_any_subfolder(subfolder_real)
+
+            # Use cached count if available
             cached_count = get_folder_file_count(subfolder_real)
             if cached_count >= 0:
                 counts[subfolder_path] = cached_count
-            else:
-                # Scan subfolder
-                sub_items = scan_directory_items(subfolder_real)
-                sub_count = sum(1 for i in sub_items if i["type"] != "folder")
-                counts[subfolder_path] = sub_count
-                set_folder_file_count(subfolder_real, sub_count)
-                
-                # Check if subfolder has subfolders
-                sub_folder_items = [i for i in sub_items if i["type"] == "folder"]
-                has_subfolders[subfolder_path] = len(sub_folder_items) > 0
-    
+                continue
+
+            # Otherwise scan subfolder for file count
+            sub_items = scan_directory_items(subfolder_real)
+            sub_count = sum(1 for i in sub_items if i["type"] != "folder")
+            counts[subfolder_path] = sub_count
+            set_folder_file_count(subfolder_real, sub_count)
+
     except Exception as e:
         utils.print_error(f"Error getting folder counts: {e}")
-    
+
     return {"counts": counts, "hasSubfolders": has_subfolders}
 
 

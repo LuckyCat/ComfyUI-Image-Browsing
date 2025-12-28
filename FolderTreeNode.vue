@@ -95,10 +95,17 @@ const isDragOver = computed(() => props.dragOverPath === props.node.fullname)
 
 // Folder icons are always yellow (cache state should not affect appearance)
 
-// Show expand arrow only when we know the folder actually has subfolders.
-// This avoids showing a misleading arrow on leaf folders.
+// Show expand icon only if:
+// 1. Node has children (loaded and has subfolders), OR
+// 2. Node has hasSubfolders explicitly set to true, OR
+// 3. Node is not loaded yet (we don't know if it has subfolders)
 const showExpandIcon = computed(() => {
-  return hasChildren.value || props.node.hasSubfolders === true
+  if (hasChildren.value) return true
+  if (props.node.hasSubfolders === true) return true
+  if (props.node.hasSubfolders === false) return false
+  // Not loaded yet - show icon so user can try to expand
+  if (!props.node.loaded) return true
+  return false
 })
 
 const onSelect = () => {
@@ -106,9 +113,9 @@ const onSelect = () => {
 }
 
 const onToggle = () => {
-  if (!showExpandIcon.value) return
   emit('toggle', props.node)
 }
+
 const onContextMenu = (event: MouseEvent) => {
   emit('contextmenu', event, props.node)
 }

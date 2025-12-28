@@ -20,7 +20,7 @@ const cacheInfo = ref({
   size_bytes: 0,
   size_mb: 0,
   size_gb: 0,
-  max_size_gb: 20,
+  max_size_gb: 1,
   usage_percent: 0,
 })
 
