@@ -13,13 +13,13 @@ export const THUMBNAIL_SIZES: Record<ThumbnailSizeType, number> = {
 
 export const FOLDER_SIZES: Record<ThumbnailSizeType, number> = {
   small: 96,
-  medium: 160,
-  large: 256,
+  medium: 400,
+  large: 768,
 }
 
 export const ITEM_SIZES: Record<ThumbnailSizeType, number> = {
   small: 128,
-  medium: 176,
+  medium: 512,
   large: 1024,
 }
 

@@ -474,6 +474,33 @@ export const useExplorer = defineStore('explorer', (store) => {
     currentSelected.value = undefined
   }
 
+  const navigateToPath = async (path: string) => {
+    // Parse the path and build breadcrumb
+    const parts = path.split('/').filter(Boolean)
+    
+    // Reset to root
+    breadcrumb.value = [rootDirectory]
+    
+    // Build path step by step
+    let currentFullPath = ''
+    for (const part of parts) {
+      currentFullPath += '/' + part
+      if (currentFullPath === '/output') continue // Skip root
+      
+      breadcrumb.value.push({
+        name: part,
+        type: 'folder',
+        size: 0,
+        fullname: currentFullPath,
+        createdAt: 0,
+        updatedAt: 0,
+        children: [],
+      })
+    }
+    
+    await refresh()
+  }
+
   return {
     loading: loading,
     items: items,
@@ -489,6 +516,7 @@ export const useExplorer = defineStore('explorer', (store) => {
     folderContext: folderContext,
     goBackParentFolder: goBackParentFolder,
     clearStatus: clearStatus,
+    navigateToPath: navigateToPath,
   }
 })
 
