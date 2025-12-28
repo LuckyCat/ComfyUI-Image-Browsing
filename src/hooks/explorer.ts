@@ -178,6 +178,81 @@ export const useExplorer = defineStore('explorer', (store) => {
     }
   }
 
+
+  const formatTimestamp = () => {
+    const d = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  }
+
+  const mergeSelectedVideos = () => {
+    const selectedVideos = selectedItems.value.filter((c) => c.type === 'video')
+
+    if (selectedItems.value.length < 2 || selectedVideos.length !== selectedItems.value.length) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Warning',
+        detail: 'Select 2+ videos to merge.',
+        life: 3000,
+      })
+      return
+    }
+
+    const defaultName = `merged_${formatTimestamp()}.mp4`
+    confirmName.value = defaultName
+
+    toast.add({
+      severity: 'info',
+      summary: 'Merge videos',
+      detail: 'Enter output filename and press Confirm.',
+      life: 3000,
+    })
+
+    confirm.require({
+      group: 'confirm-name',
+      accept: () => {
+        const name = (confirmName.value?.trim() || defaultName).trim()
+        if (name === '') return
+
+        assertValidName(name)
+
+        const orderedVideos = items.value.filter((it) =>
+          selectedVideos.some((s) => s.fullname === it.fullname),
+        )
+
+        loading.value = true
+        request('/merge-videos', {
+          method: 'POST',
+          body: JSON.stringify({
+            file_list: orderedVideos.map((c) => c.fullname),
+            output_name: name,
+          }),
+        })
+          .then(() => {
+            toast.add({
+              severity: 'success',
+              summary: 'Success',
+              detail: 'Merged video created.',
+              life: 3000,
+            })
+            return refresh()
+          })
+          .catch((err) => {
+            toast.add({
+              severity: 'error',
+              summary: 'Error',
+              detail: err.message || 'Failed to merge videos.',
+              life: 15000,
+            })
+          })
+          .finally(() => {
+            loading.value = false
+          })
+      },
+      reject: () => {},
+    })
+  }
+
   const openWorkflow = async (item: DirectoryItem) => {
     try {
       // Fetch the image file
@@ -333,6 +408,19 @@ export const useExplorer = defineStore('explorer', (store) => {
             },
           },
         )
+      }
+
+
+      const canMergeVideos =
+        selectedItems.value.length >= 2 &&
+        selectedItems.value.every((c) => c.type === 'video')
+
+      if (canMergeVideos) {
+        contextMenu.push({
+          label: 'Merge videos',
+          icon: 'pi pi-clone',
+          command: mergeSelectedVideos,
+        })
       }
 
       contextMenu.push({

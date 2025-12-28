@@ -368,65 +368,45 @@ def get_folder_counts(folder_path: str) -> dict:
     Returns dict with:
       - 'counts': folder paths as keys and file counts as values
       - 'hasSubfolders': folder paths as keys and boolean as values
-
-    Notes:
-      * We always return hasSubfolders for immediate subfolders (even when file
-        counts are cached) so the UI can reliably hide/show the expand arrow.
-      * Determining hasSubfolders is done with a cheap early-exit scandir that
-        only looks for directories.
     """
-
-    def _has_any_subfolder(dir_path: str) -> bool:
-        try:
-            with os.scandir(dir_path) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir():
-                            return True
-                    except OSError:
-                        continue
-        except OSError:
-            return False
-        return False
-
     real_path = utils.get_real_output_filepath(folder_path)
-    counts: dict[str, int] = {}
-    has_subfolders: dict[str, bool] = {}
-
+    counts = {}
+    has_subfolders = {}
+    
     try:
         # First scan the folder to get its contents
         items = scan_directory_items(real_path)
-
-        # Count media files in this folder
+        
+        # Count files in this folder
         file_count = sum(1 for item in items if item["type"] != "folder")
         folder_items = [item for item in items if item["type"] == "folder"]
-
+        
         counts[folder_path] = file_count
         has_subfolders[folder_path] = len(folder_items) > 0
-
-        # Get counts + hasSubfolders for immediate subfolders
+        
+        # Get counts for subfolders
         for item in folder_items:
             subfolder_path = f"{folder_path}/{item['name']}"
             subfolder_real = os.path.join(real_path, item["name"])
-
-            # Always compute hasSubfolders (fast)
-            has_subfolders[subfolder_path] = _has_any_subfolder(subfolder_real)
-
-            # Use cached count if available
+            
+            # Check cached count first
             cached_count = get_folder_file_count(subfolder_real)
             if cached_count >= 0:
                 counts[subfolder_path] = cached_count
-                continue
-
-            # Otherwise scan subfolder for file count
-            sub_items = scan_directory_items(subfolder_real)
-            sub_count = sum(1 for i in sub_items if i["type"] != "folder")
-            counts[subfolder_path] = sub_count
-            set_folder_file_count(subfolder_real, sub_count)
-
+            else:
+                # Scan subfolder
+                sub_items = scan_directory_items(subfolder_real)
+                sub_count = sum(1 for i in sub_items if i["type"] != "folder")
+                counts[subfolder_path] = sub_count
+                set_folder_file_count(subfolder_real, sub_count)
+                
+                # Check if subfolder has subfolders
+                sub_folder_items = [i for i in sub_items if i["type"] == "folder"]
+                has_subfolders[subfolder_path] = len(sub_folder_items) > 0
+    
     except Exception as e:
         utils.print_error(f"Error getting folder counts: {e}")
-
+    
     return {"counts": counts, "hasSubfolders": has_subfolders}
 
 
@@ -542,6 +522,121 @@ def move_files(file_list: list[str], target_folder: str):
 from PIL import Image
 from io import BytesIO
 
+
+
+# ============================================================================
+# Video merge (ffmpeg concat)
+# ============================================================================
+
+def _escape_concat_path(path: str) -> str:
+    # ffmpeg concat demuxer uses single-quoted paths: file '...'
+    return path.replace("'", "'\\''")
+
+def merge_videos(file_list: list[str], output_name: str) -> str:
+    """
+    Merge (concatenate) selected video files sequentially into a new MP4 in the same folder.
+    Returns the new file fullname (e.g. /output/sub/merged_xxx.mp4).
+    Requires ffmpeg in PATH.
+    """
+    if not file_list or len(file_list) < 2:
+        raise RuntimeError("Need at least 2 videos to merge")
+
+    # Validate and map to real paths
+    real_paths: list[str] = []
+    for file_path in file_list:
+        real_path = utils.get_real_output_filepath(file_path)
+        if not os.path.isfile(real_path):
+            raise RuntimeError(f"File not found: {file_path}")
+        if not assert_file_type(real_path, ["video"]):
+            raise RuntimeError(f"Not a video file: {file_path}")
+        real_paths.append(real_path)
+
+    # Ensure all files are in the same directory (output in same folder)
+    out_dir_real = os.path.dirname(real_paths[0])
+    for rp in real_paths[1:]:
+        if os.path.dirname(rp) != out_dir_real:
+            raise RuntimeError("All selected videos must be in the same folder")
+
+    safe_name = os.path.basename(output_name or "").strip()
+    if safe_name == "":
+        raise RuntimeError("Missing output_name")
+    if not safe_name.lower().endswith(".mp4"):
+        safe_name += ".mp4"
+
+    out_real = os.path.join(out_dir_real, safe_name)
+    if os.path.exists(out_real):
+        raise RuntimeError(f"Output already exists: {safe_name}")
+
+    # Create concat list file
+    tmp_dir_local = os.path.join(config.extension_uri, "tmp")
+    if not os.path.exists(tmp_dir_local):
+        os.makedirs(tmp_dir_local)
+
+    import time
+    list_path = os.path.join(tmp_dir_local, f"concat_{int(time.time()*1000)}.txt")
+    with open(list_path, "w", encoding="utf-8") as f:
+        for rp in real_paths:
+            f.write(f"file '{_escape_concat_path(rp)}'\n")
+
+    base = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        list_path,
+    ]
+
+    # Fast path: stream copy (works only if codecs/params match)
+    cmd_copy = base + ["-c", "copy", out_real]
+    result = subprocess.run(cmd_copy, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        # Fallback: re-encode for maximum compatibility
+        cmd_reencode = base + [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            out_real,
+        ]
+        result2 = subprocess.run(cmd_reencode, capture_output=True, text=True)
+        if result2.returncode != 0:
+            try:
+                os.remove(list_path)
+            except OSError:
+                pass
+            raise RuntimeError(
+                "ffmpeg merge failed: "
+                + (result.stderr.strip() or result2.stderr.strip() or "unknown error")
+            )
+
+    try:
+        os.remove(list_path)
+    except OSError:
+        pass
+
+    # Invalidate directory cache so new file shows up immediately
+    cache_helper.rm_cache(out_dir_real)
+
+    # Build fullname for UI (/output/...)
+    # file_list entries are already fullnames, keep their folder prefix
+    folder_fullname = os.path.dirname(file_list[0].rstrip("/"))
+    if folder_fullname == "":
+        folder_fullname = "/output"
+    new_fullname = f"{folder_fullname}/{safe_name}".replace("//", "/")
+    return new_fullname
 
 def get_cache_key(filename: str, max_size: int) -> str:
     """Generate cache key based on filename, mtime, and size"""
@@ -695,8 +790,9 @@ tmp_dir = os.path.join(config.extension_uri, "tmp")
 async def package_file(root_dir: str, file_list: list[str]):
     zip_filename = f"{datetime.datetime.now().strftime('%Y%m%dT%H%M%SZ')}.zip"
 
-    if not os.path.exists(tmp_dir):
-        os.makedirs(tmp_dir)
+    tmp_dir_local = os.path.join(config.extension_uri, "tmp")
+    if not os.path.exists(tmp_dir_local):
+        os.makedirs(tmp_dir_local)
 
     zip_temp_file = os.path.join(tmp_dir, zip_filename)
     real_root_dir = utils.get_real_output_filepath(root_dir)

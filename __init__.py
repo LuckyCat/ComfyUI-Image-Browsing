@@ -17,17 +17,6 @@ utils.download_web_distribution(version)
 from aiohttp import web
 from .py import services
 
-# ---------------------------------------------------------------------------
-# Thumbnail / preview generation can be CPU-heavy (PIL resize/encode, ffmpeg).
-# If we run it directly in the aiohttp event loop thread, it can freeze the
-# whole ComfyUI UI (same server instance). We offload work to a thread and
-# additionally limit concurrent thumbnail renders to keep the UI responsive.
-# ---------------------------------------------------------------------------
-
-# Default: keep it conservative. You can bump this if you have lots of CPU.
-_PREVIEW_CONCURRENCY = int(os.environ.get("COMFYUI_IMAGE_BROWSING_PREVIEW_CONCURRENCY", "2"))
-_preview_sem = asyncio.Semaphore(max(1, _PREVIEW_CONCURRENCY))
-
 
 routes = config.routes
 
@@ -52,25 +41,15 @@ async def scan_output_folder(request):
                     max_size = int(max_size_str)
                 except ValueError:
                     max_size = 128
-
-                # Fast 304 path (browser cache)
-                etag_value = f'"{services.get_cache_key(filepath, max_size)}"'
-                if request.headers.get("If-None-Match") == etag_value:
-                    return web.Response(status=304, headers={"ETag": etag_value})
-
-                # Offload thumbnail generation to a worker thread and limit
-                # concurrency so the ComfyUI UI stays responsive.
-                async with _preview_sem:
-                    image_data = await asyncio.to_thread(
-                        services.get_image_data, filepath, max_size
-                    )
+                
+                image_data = services.get_image_data(filepath, max_size)
                 # Add cache headers - cache for 1 hour in browser
                 return web.Response(
                     body=image_data.getvalue(), 
                     content_type="image/webp",
                     headers={
                         "Cache-Control": "public, max-age=3600",
-                        "ETag": etag_value,
+                        "ETag": f'"{services.get_cache_key(filepath, max_size)}"'
                     }
                 )
             
@@ -81,21 +60,14 @@ async def scan_output_folder(request):
                     max_size = int(max_size_str)
                 except ValueError:
                     max_size = 128
-
-                etag_value = f'"{services.get_cache_key(filepath, max_size)}"'
-                if request.headers.get("If-None-Match") == etag_value:
-                    return web.Response(status=304, headers={"ETag": etag_value})
-
-                async with _preview_sem:
-                    image_data = await asyncio.to_thread(
-                        services.get_image_data, filepath, max_size
-                    )
+                
+                image_data = services.get_image_data(filepath, max_size)
                 return web.Response(
                     body=image_data.getvalue(), 
                     content_type="image/webp",
                     headers={
                         "Cache-Control": "public, max-age=3600",
-                        "ETag": etag_value,
+                        "ETag": f'"{services.get_cache_key(filepath, max_size)}"'
                     }
                 )
 
@@ -168,6 +140,30 @@ async def move_files(request):
         error_msg = f"Move failed: {str(e)}"
         utils.print_error(error_msg)
         return web.json_response({"success": False, "error": error_msg})
+
+
+
+@routes.post("/image-browsing/merge-videos")
+async def merge_videos(request):
+    """Merge selected videos sequentially into a new file (ffmpeg concat)."""
+    try:
+        data = await request.json()
+        file_list = data.get("file_list", [])
+        output_name = data.get("output_name", None)
+
+        if not file_list or len(file_list) < 2:
+            return web.json_response({"success": False, "error": "Need at least 2 videos"}, status=400)
+
+        if not output_name:
+            return web.json_response({"success": False, "error": "Missing output_name"}, status=400)
+
+        new_fullname = await asyncio.to_thread(services.merge_videos, file_list, output_name)
+        return web.json_response({"success": True, "data": {"output": new_fullname}})
+    except Exception as e:
+        error_msg = f"Merge failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
 
 
 @routes.post("/image-browsing/cache-all")

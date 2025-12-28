@@ -31,7 +31,7 @@
       <span class="folder-icon w-4 h-4 flex items-center justify-center">
         <i 
           :class="['pi', isExpanded ? 'pi-folder-open' : 'pi-folder']" 
-          :style="{ color: '#FFCA28' }"
+          :style="{ color: isCached ? '#FFCA28' : '#A08620', opacity: isCached ? 1 : 0.7 }"
         ></i>
       </span>
       
@@ -93,12 +93,38 @@ const isSelected = computed(() => props.selectedPath === props.node.fullname)
 const hasChildren = computed(() => props.node.children && props.node.children.length > 0)
 const isDragOver = computed(() => props.dragOverPath === props.node.fullname)
 
-// Folder icons are always yellow (cache state should not affect appearance)
+// Check if this folder is cached
+const isCached = computed(() => {
+  if (!props.cachedFolders || props.cachedFolders.size === 0) return false
+  
+  // cachedFolders contains real filesystem paths like C:\...\output\folder
+  // node.fullname is like /output/folder
+  // We need to check if any cached path ends with the folder structure
+  const nodePath = props.node.fullname.replace(/^\/output/, '').replace(/\//g, '\\')
+  const nodePathUnix = props.node.fullname.replace(/^\/output/, '')
+  
+  for (const cachedPath of props.cachedFolders) {
+    // Check both Windows and Unix path endings
+    if (cachedPath.endsWith(nodePath) || cachedPath.endsWith(nodePathUnix) ||
+        cachedPath.endsWith(nodePath.replace(/\\/g, '/')) ||
+        cachedPath.replace(/\\/g, '/').endsWith(nodePathUnix)) {
+      return true
+    }
+  }
+  return false
+})
 
-// Show expand arrow only when we know the folder actually has subfolders.
-// This avoids showing a misleading arrow on leaf folders.
+// Show expand icon only if:
+// 1. Node has children (loaded and has subfolders), OR
+// 2. Node has hasSubfolders explicitly set to true, OR
+// 3. Node is not loaded yet (we don't know if it has subfolders)
 const showExpandIcon = computed(() => {
-  return hasChildren.value || props.node.hasSubfolders === true
+  if (hasChildren.value) return true
+  if (props.node.hasSubfolders === true) return true
+  if (props.node.hasSubfolders === false) return false
+  // Not loaded yet - show icon so user can try to expand
+  if (!props.node.loaded) return true
+  return false
 })
 
 const onSelect = () => {
@@ -106,9 +132,9 @@ const onSelect = () => {
 }
 
 const onToggle = () => {
-  if (!showExpandIcon.value) return
   emit('toggle', props.node)
 }
+
 const onContextMenu = (event: MouseEvent) => {
   emit('contextmenu', event, props.node)
 }

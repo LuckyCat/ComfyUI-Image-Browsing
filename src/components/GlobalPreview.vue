@@ -21,8 +21,9 @@
       v-else-if="current?.type === 'video'"
       :item="current"
       @close="close"
-    >
-    </PreviewVideo>
+      @prev="openPreviousVideo"
+      @next="openNextVideo"
+    ></PreviewVideo>
   </div>
 </template>
 
@@ -32,6 +33,13 @@ import PreviewAudio from './PreviewAudio.vue'
 import PreviewImage from './PreviewImage.vue'
 import PreviewVideo from './PreviewVideo.vue'
 
-const { visible, current, close, openPreviousImage, openNextImage } =
-  usePreview()
+const {
+  visible,
+  current,
+  close,
+  openPreviousImage,
+  openNextImage,
+  openPreviousVideo,
+  openNextVideo,
+} = usePreview()
 </script>

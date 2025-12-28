@@ -178,7 +178,7 @@ const baseZIndex = computed(() => {
 
 const cacheMenuRef = ref()
 const showCacheSizeDialog = ref(false)
-const newCacheSize = ref(1)
+const newCacheSize = ref(20)
 
 let pollInterval: number | null = null
 
