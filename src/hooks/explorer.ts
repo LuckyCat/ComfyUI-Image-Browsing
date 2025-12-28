@@ -178,6 +178,32 @@ export const useExplorer = defineStore('explorer', (store) => {
     }
   }
 
+  const openWorkflow = async (item: DirectoryItem) => {
+    try {
+      // Fetch the image file
+      const response = await fetch(`/image-browsing${item.fullname}`)
+      const blob = await response.blob()
+      
+      // Create a File object and use ComfyUI's handleFile method
+      const file = new File([blob], item.name, { type: blob.type })
+      app.handleFile(file)
+      
+      toast.add({
+        severity: 'success',
+        summary: 'Workflow Loading',
+        detail: 'Attempting to load workflow from image...',
+        life: 3000,
+      })
+    } catch (err: any) {
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || 'Failed to load workflow',
+        life: 5000,
+      })
+    }
+  }
+
   const renameItem = (item: DirectoryItem) => {
     confirmName.value = item.name
 
@@ -287,6 +313,13 @@ export const useExplorer = defineStore('explorer', (store) => {
             icon: 'pi pi-external-link',
             command: () => {
               window.open(`/image-browsing${item.fullname}`, '_blank')
+            },
+          },
+          {
+            label: t('openWorkflow'),
+            icon: 'pi pi-sitemap',
+            command: () => {
+              openWorkflow(item)
             },
           },
           {

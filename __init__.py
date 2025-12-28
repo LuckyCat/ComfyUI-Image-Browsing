@@ -43,7 +43,33 @@ async def scan_output_folder(request):
                     max_size = 128
                 
                 image_data = services.get_image_data(filepath, max_size)
-                return web.Response(body=image_data.getvalue(), content_type="image/webp")
+                # Add cache headers - cache for 1 hour in browser
+                return web.Response(
+                    body=image_data.getvalue(), 
+                    content_type="image/webp",
+                    headers={
+                        "Cache-Control": "public, max-age=3600",
+                        "ETag": f'"{services.get_cache_key(filepath, max_size)}"'
+                    }
+                )
+            
+            if services.assert_file_type(filepath, ["video"]):
+                # Get max_size from query params, default to 128
+                max_size_str = request.query.get("max_size", "128")
+                try:
+                    max_size = int(max_size_str)
+                except ValueError:
+                    max_size = 128
+                
+                image_data = services.get_image_data(filepath, max_size)
+                return web.Response(
+                    body=image_data.getvalue(), 
+                    content_type="image/webp",
+                    headers={
+                        "Cache-Control": "public, max-age=3600",
+                        "ETag": f'"{services.get_cache_key(filepath, max_size)}"'
+                    }
+                )
 
         elif os.path.isdir(filepath):
             items = await asyncio.to_thread(services.scan_directory_items, filepath)
@@ -94,6 +120,132 @@ async def delete_files(request):
         return web.json_response({"success": True})
     except Exception as e:
         error_msg = f"Delete failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/move")
+async def move_files(request):
+    try:
+        data = await request.json()
+        file_list = data.get("file_list", [])
+        target_folder = data.get("target_folder", None)
+        
+        if not file_list or not target_folder:
+            return web.json_response({"success": False, "error": "Missing file_list or target_folder"}, status=400)
+        
+        services.move_files(file_list, target_folder)
+        return web.json_response({"success": True})
+    except Exception as e:
+        error_msg = f"Move failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/cache-all")
+async def cache_all_thumbnails(request):
+    """Start caching all thumbnails in background"""
+    try:
+        data = await request.json()
+        max_size = data.get("max_size", 128)
+        priority_folder = data.get("priority_folder", None)
+        
+        # Start caching in background
+        asyncio.create_task(asyncio.to_thread(services.cache_all_images, max_size, 4, priority_folder))
+        
+        return web.json_response({"success": True, "message": "Caching started"})
+    except Exception as e:
+        error_msg = f"Cache failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.get("/image-browsing/cache-status")
+async def get_cache_status(request):
+    """Get current cache status"""
+    try:
+        status = services.get_cache_status()
+        return web.json_response({"success": True, "data": status})
+    except Exception as e:
+        error_msg = f"Status failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/cache-pause")
+async def pause_caching(request):
+    """Pause caching process"""
+    try:
+        status = services.pause_caching()
+        return web.json_response({"success": True, "data": status})
+    except Exception as e:
+        error_msg = f"Pause failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/cache-resume")
+async def resume_caching(request):
+    """Resume caching process"""
+    try:
+        status = services.resume_caching()
+        return web.json_response({"success": True, "data": status})
+    except Exception as e:
+        error_msg = f"Resume failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/cache-stop")
+async def stop_caching(request):
+    """Stop caching process"""
+    try:
+        status = services.stop_caching()
+        return web.json_response({"success": True, "data": status})
+    except Exception as e:
+        error_msg = f"Stop failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/cache-config")
+async def set_cache_config(request):
+    """Set cache configuration"""
+    try:
+        data = await request.json()
+        max_size_gb = data.get("max_size_gb", 20.0)
+        
+        result = services.set_cache_max_size(max_size_gb)
+        return web.json_response({"success": True, "data": result})
+    except Exception as e:
+        error_msg = f"Config failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.delete("/image-browsing/cache")
+async def clear_cache(request):
+    """Clear all cached thumbnails"""
+    try:
+        services.clear_cache()
+        return web.json_response({"success": True})
+    except Exception as e:
+        error_msg = f"Clear cache failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.get("/image-browsing/folder-counts{pathname:.*}")
+async def get_folder_counts(request):
+    """Get file counts for folder and subfolders"""
+    try:
+        pathname = request.match_info.get("pathname", "")
+        pathname = utils.get_output_pathname(pathname)
+        
+        counts = await asyncio.to_thread(services.get_folder_counts, pathname)
+        return web.json_response({"success": True, "data": counts})
+    except Exception as e:
+        error_msg = f"Folder counts failed: {str(e)}"
         utils.print_error(error_msg)
         return web.json_response({"success": False, "error": error_msg})
 

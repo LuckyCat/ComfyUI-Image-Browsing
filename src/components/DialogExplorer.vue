@@ -15,6 +15,8 @@
         ref="folderTreeRef"
         :selected-path="currentPath"
         @select="onTreeSelect"
+        @refresh="onRefresh"
+        @move-files="onMoveFiles"
       />
     </div>
 
@@ -169,16 +171,30 @@
                         ></path>
                       </svg>
                     </div>
-                    <img
+                    <LazyImage
                       v-else-if="rowItem.type === 'image'"
-                      class="h-full w-full object-contain"
+                      class="h-full w-full"
                       :src="getPreviewUrl(rowItem)"
                       alt="preview"
                     />
                     <div
-                      v-else-if="
-                        rowItem.type === 'audio' || rowItem.type === 'video'
-                      "
+                      v-else-if="rowItem.type === 'video'"
+                      class="relative h-full w-full"
+                    >
+                      <LazyImage
+                        class="h-full w-full"
+                        :src="getPreviewUrl(rowItem)"
+                        alt="video preview"
+                      />
+                      <!-- Video play icon overlay -->
+                      <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div class="bg-black/50 rounded-full p-2">
+                          <i class="pi pi-play text-white text-xl"></i>
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      v-else-if="rowItem.type === 'audio'"
                       class="relative flex h-full w-full items-center justify-center"
                     >
                       <svg
@@ -245,6 +261,7 @@
                     <div
                       class="absolute left-0 top-0 h-full w-full"
                       draggable="true"
+                      @dragstart="(e) => onItemDragStart(e, rowItem)"
                       @dragend.stop="rowItem.onDragEnd"
                     ></div>
                   </div>
@@ -317,12 +334,15 @@
 
 <script setup lang="ts">
 import FolderTree from 'components/FolderTree.vue'
+import LazyImage from 'components/LazyImage.vue'
 import ResponseInput from 'components/ResponseInput.vue'
 import ResponseScroll from 'components/ResponseScroll.vue'
 import ResponseSelect from 'components/ResponseSelect.vue'
 import { useContainerQueries } from 'hooks/container'
 import { useExplorer } from 'hooks/explorer'
 import { useContainerResize } from 'hooks/resize'
+import { request } from 'hooks/request'
+import { useToast } from 'hooks/toast'
 import { useThumbnailSize, THUMBNAIL_SIZES } from 'hooks/thumbnailSize'
 import { chunk } from 'lodash'
 import Button from 'primevue/button'
@@ -334,6 +354,8 @@ import { DirectoryItem } from 'types/typings'
 import { computed, ref } from 'vue'
 
 const vTooltip = Tooltip
+
+const { toast } = useToast()
 
 const container = ref<HTMLElement | null>(null)
 const folderTreeRef = ref<InstanceType<typeof FolderTree> | null>(null)
@@ -411,6 +433,47 @@ const clearSelected = () => {
 
 const vFocus = {
   mounted: (el: HTMLInputElement) => el.focus(),
+}
+
+const onItemDragStart = (event: DragEvent, item: DirectoryItem) => {
+  // If this item is selected, drag all selected items
+  // Otherwise, drag just this item
+  const itemsToMove = selectedItems.value.some(i => i.fullname === item.fullname)
+    ? selectedItems.value.map(i => i.fullname)
+    : [item.fullname]
+  
+  event.dataTransfer?.setData('application/json', JSON.stringify(itemsToMove))
+  event.dataTransfer!.effectAllowed = 'move'
+}
+
+const onMoveFiles = async (files: string[], targetFolder: string) => {
+  try {
+    await request('/move', {
+      method: 'POST',
+      body: JSON.stringify({
+        file_list: files,
+        target_folder: targetFolder,
+      }),
+    })
+    
+    toast.add({
+      severity: 'success',
+      summary: 'Success',
+      detail: `Moved ${files.length} item(s)`,
+      life: 2000,
+    })
+    
+    // Refresh current view
+    await refresh()
+    folderTreeRef.value?.refreshTree()
+  } catch (err: any) {
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: err.message || 'Failed to move files',
+      life: 5000,
+    })
+  }
 }
 </script>
 

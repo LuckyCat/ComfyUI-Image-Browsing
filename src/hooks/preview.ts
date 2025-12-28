@@ -9,7 +9,7 @@ export const usePreview = defineStore('preview', (store) => {
 
   const previewItems = computed(() => {
     return store.explorer.items.value.filter((item) => {
-      return item.type === 'image'
+      return item.type === 'image' || item.type === 'video'
     })
   })
 
@@ -35,7 +35,7 @@ export const usePreview = defineStore('preview', (store) => {
     if (event.key === 'Escape') {
       close()
     }
-    if (current.value?.type === 'image') {
+    if (current.value?.type === 'image' || current.value?.type === 'video') {
       if (event.key === 'ArrowLeft') {
         openPreviousImage()
       }
