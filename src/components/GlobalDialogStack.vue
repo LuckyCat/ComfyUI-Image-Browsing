@@ -19,6 +19,13 @@
     <template #header>
       <div class="flex flex-1 items-center justify-between pr-2">
         <span class="p-dialog-title select-none">{{ item.title }}</span>
+
+        <!-- Size Selector for Output Explorer -->
+        <SizeSelector
+          v-if="item.key === 'output-explorer'"
+          class="ml-8"
+        ></SizeSelector>
+
         <div class="p-dialog-header-actions">
           <Button
             v-for="action in item.headerButtons"
@@ -41,6 +48,7 @@
 
 <script setup lang="ts">
 import ResponseDialog from 'components/ResponseDialog.vue'
+import SizeSelector from 'components/SizeSelector.vue'
 import { useDialog } from 'hooks/dialog'
 import Button from 'primevue/button'
 import { usePrimeVue } from 'primevue/config'

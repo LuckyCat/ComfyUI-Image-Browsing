@@ -34,6 +34,7 @@ def assert_file_type(filename: str, content_types: Literal["image", "video", "au
 class CacheHelper:
     def __init__(self) -> None:
         self.cache: dict[str, tuple[list, float]] = {}
+        self.image_cache: dict[str, tuple[bytes, int]] = {}
 
     def get_cache(self, key: str):
         return self.cache.get(key, ([], 0))
@@ -44,6 +45,12 @@ class CacheHelper:
     def rm_cache(self, key: str):
         if key in self.cache:
             del self.cache[key]
+
+    def get_image_cache(self, key: str):
+        return self.image_cache.get(key, None)
+
+    def set_image_cache(self, key: str, data: bytes, max_size: int):
+        self.image_cache[key] = (data, max_size)
 
 
 cache_helper = CacheHelper()
@@ -148,10 +155,32 @@ from PIL import Image
 from io import BytesIO
 
 
-def get_image_data(filename: str):
+def get_image_data(filename: str, max_size: int = 128):
+    """
+    Generate a thumbnail of the image with the specified max_size.
+    
+    Args:
+        filename: Path to the image file
+        max_size: Maximum dimension (width or height) for the thumbnail.
+                  Supported values: 128 (small), 512 (medium), 1024 (large)
+    
+    Returns:
+        BytesIO object containing the WEBP thumbnail
+    """
+    # Clamp max_size to valid range
+    max_size = max(64, min(max_size, 1024))
+    
+    # Check cache first
+    cache_key = f"{filename}:{max_size}"
+    cached = cache_helper.get_image_cache(cache_key)
+    if cached is not None:
+        cached_data, cached_size = cached
+        if cached_size == max_size:
+            img_byte_arr = BytesIO(cached_data)
+            img_byte_arr.seek(0)
+            return img_byte_arr
+    
     with Image.open(filename) as img:
-        max_size = 128
-
         old_width, old_height = img.size
         scale = min(max_size / old_width, max_size / old_height)
 
@@ -164,8 +193,22 @@ def get_image_data(filename: str):
         img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
         img_byte_arr = BytesIO()
-        img.save(img_byte_arr, format="WEBP")
+        
+        # Adjust quality based on size
+        if max_size <= 128:
+            quality = 70
+        elif max_size <= 512:
+            quality = 80
+        else:
+            quality = 85
+            
+        img.save(img_byte_arr, format="WEBP", quality=quality)
         img_byte_arr.seek(0)
+        
+        # Cache the result
+        cache_helper.set_image_cache(cache_key, img_byte_arr.getvalue(), max_size)
+        img_byte_arr.seek(0)
+        
         return img_byte_arr
 
 

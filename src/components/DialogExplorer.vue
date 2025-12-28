@@ -88,13 +88,17 @@
       @click="clearSelected"
       @contextmenu.stop="folderContext"
     >
-      <ResponseScroll :items="folderItems" :item-size="128" class="h-full">
+      <ResponseScroll :items="folderItems" :item-size="itemSize" class="h-full">
         <template #item="{ item }">
-          <div class="grid grid-cols-[repeat(auto-fit,8rem)] justify-center">
+          <div
+            class="grid justify-center"
+            :style="{ gridTemplateColumns: `repeat(auto-fit, ${itemSize}px)` }"
+          >
             <div
               v-for="rowItem in item"
               :key="rowItem.name"
-              class="h-32 w-32 px-1 pb-1"
+              class="px-1 pb-1"
+              :style="{ width: `${itemSize}px`, height: `${itemSize}px` }"
             >
               <div
                 :class="[
@@ -108,7 +112,13 @@
                 @dblclick.stop="rowItem.onDbClick"
                 @contextmenu.stop="rowItem.onContextMenu"
               >
-                <div class="relative h-24 w-24 overflow-hidden rounded-lg">
+                <div
+                  class="relative overflow-hidden rounded-lg"
+                  :style="{
+                    width: `${rowItem.type === 'folder' ? folderSize : thumbnailSize}px`,
+                    height: `${rowItem.type === 'folder' ? folderSize : thumbnailSize}px`,
+                  }"
+                >
                   <div v-if="rowItem.type === 'folder'" class="h-full w-full">
                     <svg
                       t="1730360536641"
@@ -135,7 +145,7 @@
                   <img
                     v-else-if="rowItem.type === 'image'"
                     class="h-full w-full object-contain"
-                    :src="`/image-browsing${rowItem.fullname}?preview=true`"
+                    :src="getPreviewUrl(rowItem)"
                     alt="preview"
                   />
                   <div
@@ -284,11 +294,13 @@ import ResponseSelect from 'components/ResponseSelect.vue'
 import { useContainerQueries } from 'hooks/container'
 import { useExplorer } from 'hooks/explorer'
 import { useContainerResize } from 'hooks/resize'
+import { useThumbnailSize, THUMBNAIL_SIZES } from 'hooks/thumbnailSize'
 import { chunk } from 'lodash'
 import Button from 'primevue/button'
 import ConfirmDialog from 'primevue/confirmdialog'
 import ContextMenu from 'primevue/contextmenu'
 import InputText from 'primevue/inputtext'
+import { DirectoryItem } from 'types/typings'
 import { computed, ref } from 'vue'
 
 const container = ref<HTMLElement | null>(null)
@@ -307,6 +319,8 @@ const {
   goBackParentFolder,
 } = useExplorer()
 
+const { currentSize, thumbnailSize, folderSize, itemSize } = useThumbnailSize()
+
 const searchContent = ref('')
 
 const { width } = useContainerResize(container)
@@ -314,8 +328,7 @@ const { $xl } = useContainerQueries(container)
 
 const cols = computed(() => {
   const containerWidth = width.value
-  const itemWidth = 128
-  return Math.floor(containerWidth / itemWidth)
+  return Math.floor(containerWidth / itemSize.value)
 })
 
 const folderItems = computed(() => {
@@ -332,6 +345,11 @@ const currentFolderName = computed(() => {
 const selectedItemsName = computed(() => {
   return selectedItems.value.map((item) => item.name)
 })
+
+const getPreviewUrl = (item: DirectoryItem) => {
+  const size = THUMBNAIL_SIZES[currentSize.value]
+  return `/image-browsing${item.fullname}?preview=true&max_size=${size}`
+}
 
 const nonContextMenu = ($event: MouseEvent) => {
   menu.value.hide($event)

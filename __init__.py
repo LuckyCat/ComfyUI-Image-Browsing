@@ -1,5 +1,6 @@
 import os
 import folder_paths
+import asyncio
 from .py import config
 
 
@@ -34,11 +35,18 @@ async def scan_output_folder(request):
                 return web.FileResponse(filepath)
 
             if services.assert_file_type(filepath, ["image"]):
-                image_data = services.get_image_data(filepath)
+                # Get max_size from query params, default to 128
+                max_size_str = request.query.get("max_size", "128")
+                try:
+                    max_size = int(max_size_str)
+                except ValueError:
+                    max_size = 128
+                
+                image_data = services.get_image_data(filepath, max_size)
                 return web.Response(body=image_data.getvalue(), content_type="image/webp")
 
         elif os.path.isdir(filepath):
-            items = services.scan_directory_items(filepath)
+            items = await asyncio.to_thread(services.scan_directory_items, filepath)
             return web.json_response({"success": True, "data": items})
 
         return web.Response(status=404)

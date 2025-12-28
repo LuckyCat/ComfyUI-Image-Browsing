@@ -17,7 +17,14 @@
   "items": "个项目",
   "cancel": "取消",
   "confirm": "确认",
+  "thumbnailSize": "缩略图大小",
+  "size": {
+    "small": "小",
+    "medium": "中",
+    "large": "大"
+  },
   "setting": {
-    "showDeleteConfirm": "显示删除确认对话框"
+    "showDeleteConfirm": "显示删除确认对话框",
+    "thumbnailSize": "默认缩略图大小"
   }
 }

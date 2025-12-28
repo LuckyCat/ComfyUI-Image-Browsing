@@ -17,7 +17,14 @@
   "items": "Items",
   "cancel": "Cancel",
   "confirm": "Confirm",
+  "thumbnailSize": "Thumbnail Size",
+  "size": {
+    "small": "Small",
+    "medium": "Medium",
+    "large": "Large"
+  },
   "setting": {
-    "showDeleteConfirm": "Show delete confirmation dialog"
+    "showDeleteConfirm": "Show delete confirmation dialog",
+    "thumbnailSize": "Default thumbnail size"
   }
 }
