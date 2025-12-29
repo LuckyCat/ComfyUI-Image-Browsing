@@ -19,6 +19,11 @@ export const usePreview = defineStore('preview', (store) => {
     return store.explorer.items.value.filter((item) => item.type === 'video')
   })
 
+  const promptItems = computed(() => {
+    // Used for prompt navigation
+    return store.explorer.items.value.filter((item) => item.type === 'prompt')
+  })
+
   const openPreviousImage = () => {
     if (previewItems.value.length === 0) return
     currentIndex.value--
@@ -63,6 +68,26 @@ export const usePreview = defineStore('preview', (store) => {
     currentIndex.value = previewItems.value.indexOf(item)
   }
 
+  const openPreviousPrompt = () => {
+    if (promptItems.value.length === 0) return
+    const cur = current.value
+    if (!cur || cur.type !== 'prompt') return
+
+    const idx = promptItems.value.findIndex((v) => v.fullname === cur.fullname)
+    const prevIndex = idx <= 0 ? promptItems.value.length - 1 : idx - 1
+    current.value = promptItems.value[prevIndex]
+  }
+
+  const openNextPrompt = () => {
+    if (promptItems.value.length === 0) return
+    const cur = current.value
+    if (!cur || cur.type !== 'prompt') return
+
+    const idx = promptItems.value.findIndex((v) => v.fullname === cur.fullname)
+    const nextIndex = idx >= promptItems.value.length - 1 ? 0 : idx + 1
+    current.value = promptItems.value[nextIndex]
+  }
+
   const previewKeyboardListener = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
       close()
@@ -85,12 +110,23 @@ export const usePreview = defineStore('preview', (store) => {
         openNextVideo()
       }
     }
+
+    if (current.value?.type === 'prompt') {
+      if (event.key === 'ArrowLeft') {
+        openPreviousPrompt()
+      }
+      if (event.key === 'ArrowRight') {
+        openNextPrompt()
+      }
+    }
   }
 
   const open = (item: DirectoryItem) => {
     visible.value = true
     current.value = item
-    currentIndex.value = previewItems.value.indexOf(item)
+    if (item.type === 'image' || item.type === 'video') {
+      currentIndex.value = previewItems.value.indexOf(item)
+    }
     document.addEventListener('keyup', previewKeyboardListener)
   }
 
@@ -108,6 +144,8 @@ export const usePreview = defineStore('preview', (store) => {
     openNextImage,
     openPreviousVideo,
     openNextVideo,
+    openPreviousPrompt,
+    openNextPrompt,
   }
 })
 

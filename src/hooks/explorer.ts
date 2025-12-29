@@ -3,7 +3,7 @@ import { defineStore } from 'hooks/store'
 import { useToast } from 'hooks/toast'
 import { MenuItem } from 'primevue/menuitem'
 import { app } from 'scripts/comfyAPI'
-import { DirectoryItem, SelectOptions } from 'types/typings'
+import { DirectoryItem, SelectOptions, RootFolderType } from 'types/typings'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -11,21 +11,32 @@ interface DirectoryBreadcrumb extends DirectoryItem {
   children: SelectOptions[]
 }
 
+// Helper to get root type from path
+const getRootType = (path: string): RootFolderType => {
+  if (path.startsWith('/workflows')) return 'workflows'
+  if (path.startsWith('/prompts')) return 'prompts'
+  return 'output'
+}
+
+// Helper to get root directory for a type
+const getRootDirectory = (type: RootFolderType): DirectoryBreadcrumb => ({
+  name: type,
+  type: 'folder',
+  size: 0,
+  fullname: `/${type}`,
+  createdAt: 0,
+  updatedAt: 0,
+  children: [],
+})
+
 export const useExplorer = defineStore('explorer', (store) => {
   const { toast, confirm } = useToast()
   const { t } = useI18n()
 
   const loading = ref(false)
+  const currentRootType = ref<RootFolderType>('output')
 
-  const rootDirectory: DirectoryBreadcrumb = {
-    name: 'output',
-    type: 'folder',
-    size: 0,
-    fullname: '/output',
-    createdAt: 0,
-    updatedAt: 0,
-    children: [],
-  }
+  const rootDirectory: DirectoryBreadcrumb = getRootDirectory('output')
 
   const breadcrumb = ref<DirectoryBreadcrumb[]>([rootDirectory])
   const currentPath = computed(() => {
@@ -279,6 +290,62 @@ export const useExplorer = defineStore('explorer', (store) => {
     }
   }
 
+  const openWorkflowFile = async (item: DirectoryItem) => {
+    try {
+      // Fetch the workflow JSON file
+      const response = await fetch(`/image-browsing${item.fullname}`)
+      const blob = await response.blob()
+      
+      // Create a File object and use ComfyUI's handleFile method
+      const file = new File([blob], item.name, { type: 'application/json' })
+      app.handleFile(file)
+      
+      toast.add({
+        severity: 'success',
+        summary: 'Workflow Loading',
+        detail: 'Loading workflow...',
+        life: 2000,
+      })
+    } catch (err: any) {
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || 'Failed to load workflow',
+        life: 5000,
+      })
+    }
+  }
+
+  const duplicateWorkflow = async (item: DirectoryItem) => {
+    loading.value = true
+    try {
+      await request('/duplicate-workflow', {
+        method: 'POST',
+        body: JSON.stringify({
+          file_path: item.fullname,
+        }),
+      })
+      
+      toast.add({
+        severity: 'success',
+        summary: 'Success',
+        detail: 'Workflow duplicated.',
+        life: 2000,
+      })
+      
+      await refresh()
+    } catch (err: any) {
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || 'Failed to duplicate workflow.',
+        life: 5000,
+      })
+    } finally {
+      loading.value = false
+    }
+  }
+
   const extractVideoFrame = async (item: DirectoryItem, frameType: 'first' | 'last') => {
     loading.value = true
     try {
@@ -382,6 +449,12 @@ export const useExplorer = defineStore('explorer', (store) => {
     item.onDbClick = () => {
       if (item.type === 'folder') {
         entryFolder(item, breadcrumb.value.length)
+      } else if (item.type === 'workflow') {
+        // Open workflow in ComfyUI
+        openWorkflowFile(item)
+      } else if (item.type === 'prompt') {
+        // Open text preview
+        store.preview.open(item)
       } else {
         store.preview.open(item)
       }
@@ -396,6 +469,7 @@ export const useExplorer = defineStore('explorer', (store) => {
       }
 
       const contextMenu: MenuItem[] = []
+      const rootType = getRootType(item.fullname)
 
       if (item.type === 'folder') {
         contextMenu.push({
@@ -405,7 +479,31 @@ export const useExplorer = defineStore('explorer', (store) => {
             item.onDbClick?.($event)
           },
         })
+      } else if (item.type === 'workflow') {
+        // Workflow context menu
+        contextMenu.push(
+          {
+            label: t('openWorkflow'),
+            icon: 'pi pi-play',
+            command: () => openWorkflowFile(item),
+          },
+          {
+            label: t('duplicate'),
+            icon: 'pi pi-copy',
+            command: () => duplicateWorkflow(item),
+          },
+        )
+      } else if (item.type === 'prompt') {
+        // Prompt context menu
+        contextMenu.push({
+          label: t('open'),
+          icon: 'pi pi-file-edit',
+          command: () => {
+            item.onDbClick?.($event)
+          },
+        })
       } else {
+        // Media file context menu (images, videos, audio)
         contextMenu.push(
           {
             label: t('open'),
@@ -469,6 +567,7 @@ export const useExplorer = defineStore('explorer', (store) => {
         })
       }
 
+      // Rename option for all types
       contextMenu.push({
         label: t('rename'),
         icon: 'pi pi-file-edit',
@@ -477,13 +576,15 @@ export const useExplorer = defineStore('explorer', (store) => {
         },
       })
 
+      // Delete option for all types
       contextMenu.push({
         label: t('delete'),
         icon: 'pi pi-trash',
         command: deleteItems,
       })
 
-      if (selectedItems.value.length > 1 || item.type === 'folder') {
+      // Download/Archive only for output folder (media files)
+      if (rootType === 'output' && (selectedItems.value.length > 1 || item.type === 'folder')) {
         contextMenu.push({
           label: t('download'),
           icon: 'pi pi-download',
@@ -540,28 +641,65 @@ export const useExplorer = defineStore('explorer', (store) => {
     }
   }
 
+  const createNewPrompt = async () => {
+    loading.value = true
+    try {
+      await request('/create-prompt', {
+        method: 'POST',
+        body: JSON.stringify({
+          folder_path: currentPath.value,
+          filename: 'New Prompt.txt',
+        }),
+      })
+      
+      toast.add({
+        severity: 'success',
+        summary: 'Success',
+        detail: 'New prompt created.',
+        life: 2000,
+      })
+      
+      await refresh()
+    } catch (err: any) {
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || 'Failed to create prompt.',
+        life: 5000,
+      })
+    } finally {
+      loading.value = false
+    }
+  }
+
   const folderContext = ($event: MouseEvent) => {
     selectedItems.value = []
-    const contextMenu: MenuItem[] = [
-      {
-        label: t('addFolder'),
-        icon: 'pi pi-folder-plus',
-        command: () => {
-          confirmName.value = t('newFolderName')
+    const rootType = getRootType(currentPath.value)
+    const contextMenu: MenuItem[] = []
+    
+    // Add folder option (for all types)
+    contextMenu.push({
+      label: t('addFolder'),
+      icon: 'pi pi-folder-plus',
+      command: () => {
+        confirmName.value = t('newFolderName')
 
-          confirm.require({
-            group: 'confirm-name',
-            accept: () => {
-              const name = confirmName.value ?? ''
-              assertValidName(name)
-              const formData = new FormData()
-              formData.append('folders', name)
-              createItems(formData)
-            },
-          })
-        },
+        confirm.require({
+          group: 'confirm-name',
+          accept: () => {
+            const name = confirmName.value ?? ''
+            assertValidName(name)
+            const formData = new FormData()
+            formData.append('folders', name)
+            createItems(formData)
+          },
+        })
       },
-      {
+    })
+    
+    // Upload file option (only for output)
+    if (rootType === 'output') {
+      contextMenu.push({
         label: t('uploadFile'),
         icon: 'pi pi-upload',
         command: () => {
@@ -582,8 +720,17 @@ export const useExplorer = defineStore('explorer', (store) => {
           }
           fileInput.click()
         },
-      },
-    ]
+      })
+    }
+    
+    // New prompt option (only for prompts)
+    if (rootType === 'prompts') {
+      contextMenu.push({
+        label: 'New Prompt',
+        icon: 'pi pi-file-edit',
+        command: createNewPrompt,
+      })
+    }
 
     contextItems.value = contextMenu
     menuRef.value.show($event)
@@ -645,14 +792,20 @@ export const useExplorer = defineStore('explorer', (store) => {
     // Parse the path and build breadcrumb
     const parts = path.split('/').filter(Boolean)
     
-    // Reset to root
-    breadcrumb.value = [rootDirectory]
+    // Determine root type from path
+    const rootType = getRootType(path)
+    currentRootType.value = rootType
+    const newRootDirectory = getRootDirectory(rootType)
+    
+    // Reset to appropriate root
+    breadcrumb.value = [newRootDirectory]
     
     // Build path step by step
     let currentFullPath = ''
     for (const part of parts) {
       currentFullPath += '/' + part
-      if (currentFullPath === '/output') continue // Skip root
+      // Skip root folder itself
+      if (currentFullPath === `/${rootType}`) continue
       
       breadcrumb.value.push({
         name: part,
@@ -676,6 +829,7 @@ export const useExplorer = defineStore('explorer', (store) => {
     contextItems: contextItems,
     selectedItems: selectedItems,
     confirmName: confirmName,
+    currentRootType: currentRootType,
     refresh: refresh,
     deleteItems: deleteItems,
     renameItem: renameItem,

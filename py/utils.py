@@ -85,3 +85,41 @@ def get_output_pathname(pathname: str):
 
 def get_real_output_filepath(filepath: str):
     return filepath.replace("/output", config.output_uri, 1)
+
+
+def get_workflows_pathname(pathname: str):
+    return f"/workflows{pathname}"
+
+
+def get_real_workflows_filepath(filepath: str):
+    return filepath.replace("/workflows", config.workflows_uri, 1)
+
+
+def get_prompts_pathname(pathname: str):
+    return f"/prompts{pathname}"
+
+
+def get_real_prompts_filepath(filepath: str):
+    return filepath.replace("/prompts", config.prompts_uri, 1)
+
+
+def get_real_filepath_by_type(filepath: str):
+    """Get real filepath based on the root folder type"""
+    if filepath.startswith("/output"):
+        return get_real_output_filepath(filepath)
+    elif filepath.startswith("/workflows"):
+        return get_real_workflows_filepath(filepath)
+    elif filepath.startswith("/prompts"):
+        return get_real_prompts_filepath(filepath)
+    return filepath
+
+
+def get_root_type(filepath: str):
+    """Get the root type of the filepath"""
+    if filepath.startswith("/output"):
+        return "output"
+    elif filepath.startswith("/workflows"):
+        return "workflows"
+    elif filepath.startswith("/prompts"):
+        return "prompts"
+    return None

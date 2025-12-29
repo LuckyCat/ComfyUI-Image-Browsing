@@ -7,6 +7,15 @@ from .py import config
 config.extension_uri = os.path.dirname(__file__)
 config.output_uri = folder_paths.get_output_directory()
 
+# Get ComfyUI base directory for workflows
+comfyui_base = os.path.dirname(folder_paths.get_output_directory())
+config.workflows_uri = os.path.join(comfyui_base, "user", "default", "workflows")
+config.prompts_uri = os.path.join(comfyui_base, "user", "default", "prompts")
+
+# Create prompts directory if it doesn't exist
+if not os.path.exists(config.prompts_uri):
+    os.makedirs(config.prompts_uri)
+
 
 from .py import utils
 
@@ -20,6 +29,10 @@ from .py import services
 
 routes = config.routes
 
+
+# ============================================================================
+# Output folder routes (media files)
+# ============================================================================
 
 @routes.get("/image-browsing/output{pathname:.*}")
 async def scan_output_folder(request):
@@ -82,6 +95,178 @@ async def scan_output_folder(request):
         return web.json_response({"success": False, "error": error_msg})
 
 
+# ============================================================================
+# Workflows folder routes
+# ============================================================================
+
+@routes.get("/image-browsing/workflows{pathname:.*}")
+async def scan_workflows_folder(request):
+    try:
+        pathname = request.match_info.get("pathname", None)
+        pathname = utils.get_workflows_pathname(pathname)
+        filepath = utils.get_real_workflows_filepath(pathname)
+
+        if os.path.isfile(filepath):
+            return web.FileResponse(filepath)
+
+        elif os.path.isdir(filepath):
+            items = await asyncio.to_thread(services.scan_workflows_directory, filepath)
+            return web.json_response({"success": True, "data": items})
+
+        return web.Response(status=404)
+    except Exception as e:
+        error_msg = f"Obtain workflows failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/workflows{pathname:.*}")
+async def create_workflow_folder(request):
+    try:
+        pathname = request.match_info.get("pathname", None)
+        pathname = utils.get_workflows_pathname(pathname)
+        reader = await request.multipart()
+        await services.create_file_or_folder_generic(pathname, reader, "workflows")
+        return web.json_response({"success": True})
+    except Exception as e:
+        error_msg = f"Create workflow folder failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.put("/image-browsing/workflows{pathname:.*}")
+async def update_workflow_file(request):
+    try:
+        pathname = request.match_info.get("pathname", None)
+        pathname = utils.get_workflows_pathname(pathname)
+        data = await request.json()
+        filename = data.get("filename", None)
+        services.rename_file_generic(pathname, filename, "workflows")
+        return web.json_response({"success": True})
+    except Exception as e:
+        error_msg = f"Update workflow failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/duplicate-workflow")
+async def duplicate_workflow(request):
+    try:
+        data = await request.json()
+        file_path = data.get("file_path", None)
+        if not file_path:
+            return web.json_response({"success": False, "error": "Missing file_path"}, status=400)
+        
+        new_path = await asyncio.to_thread(services.duplicate_workflow, file_path)
+        return web.json_response({"success": True, "data": {"new_path": new_path}})
+    except Exception as e:
+        error_msg = f"Duplicate workflow failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+# ============================================================================
+# Prompts folder routes
+# ============================================================================
+
+@routes.get("/image-browsing/prompts{pathname:.*}")
+async def scan_prompts_folder(request):
+    try:
+        pathname = request.match_info.get("pathname", None)
+        pathname = utils.get_prompts_pathname(pathname)
+        filepath = utils.get_real_prompts_filepath(pathname)
+
+        if os.path.isfile(filepath):
+            # Return file content for text files
+            if filepath.endswith('.txt'):
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return web.json_response({"success": True, "data": {"content": content}})
+            return web.FileResponse(filepath)
+
+        elif os.path.isdir(filepath):
+            items = await asyncio.to_thread(services.scan_prompts_directory, filepath)
+            return web.json_response({"success": True, "data": items})
+
+        return web.Response(status=404)
+    except Exception as e:
+        error_msg = f"Obtain prompts failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/prompts{pathname:.*}")
+async def create_prompt_folder(request):
+    try:
+        pathname = request.match_info.get("pathname", None)
+        pathname = utils.get_prompts_pathname(pathname)
+        reader = await request.multipart()
+        await services.create_file_or_folder_generic(pathname, reader, "prompts")
+        return web.json_response({"success": True})
+    except Exception as e:
+        error_msg = f"Create prompt folder failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.put("/image-browsing/prompts{pathname:.*}")
+async def update_prompt_file(request):
+    try:
+        pathname = request.match_info.get("pathname", None)
+        pathname = utils.get_prompts_pathname(pathname)
+        data = await request.json()
+        
+        # Check if this is content update or rename
+        if "content" in data:
+            # Save file content
+            filepath = utils.get_real_prompts_filepath(pathname.replace("/content", ""))
+            content = data.get("content", "")
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return web.json_response({"success": True})
+        else:
+            # Rename file
+            filename = data.get("filename", None)
+            services.rename_file_generic(pathname, filename, "prompts")
+            return web.json_response({"success": True})
+    except Exception as e:
+        error_msg = f"Update prompt failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/create-prompt")
+async def create_new_prompt(request):
+    try:
+        data = await request.json()
+        folder_path = data.get("folder_path", "/prompts")
+        filename = data.get("filename", "New Prompt.txt")
+        
+        filepath = utils.get_real_prompts_filepath(folder_path)
+        full_path = os.path.join(filepath, filename)
+        
+        # Handle name conflicts
+        base, ext = os.path.splitext(full_path)
+        counter = 1
+        while os.path.exists(full_path):
+            full_path = f"{base}({counter}){ext}"
+            counter += 1
+        
+        # Create empty file
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write("")
+        
+        return web.json_response({"success": True, "data": {"path": full_path}})
+    except Exception as e:
+        error_msg = f"Create prompt failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+# ============================================================================
+# Output folder mutation routes
+# ============================================================================
+
 @routes.post("/image-browsing/output{pathname:.*}")
 async def create_file_or_folder(request):
     try:
@@ -116,7 +301,7 @@ async def delete_files(request):
     try:
         data = await request.json()
         file_list = data.get("file_list", [])
-        services.recursive_delete_files(file_list)
+        services.recursive_delete_files_generic(file_list)
         return web.json_response({"success": True})
     except Exception as e:
         error_msg = f"Delete failed: {str(e)}"
@@ -134,7 +319,8 @@ async def move_files(request):
         if not file_list or not target_folder:
             return web.json_response({"success": False, "error": "Missing file_list or target_folder"}, status=400)
         
-        services.move_files(file_list, target_folder)
+        # Validate that files and target are in the same root
+        services.move_files_generic(file_list, target_folder)
         return web.json_response({"success": True})
     except Exception as e:
         error_msg = f"Move failed: {str(e)}"
@@ -326,16 +512,17 @@ async def download_tmp_file(request):
 
 @routes.post("/image-browsing/extract-frame")
 async def extract_video_frame(request):
-    """Extract first or last frame from a video file"""
+    """Extract first, last, or current frame from a video file"""
     try:
         data = await request.json()
         video_path = data.get("video_path", None)
-        frame_type = data.get("frame_type", "first")  # "first" or "last"
+        frame_type = data.get("frame_type", "first")  # "first", "last", or "current"
+        timestamp = data.get("timestamp", 0)  # For "current" frame type
         
         if not video_path:
             return web.json_response({"success": False, "error": "Missing video_path"}, status=400)
         
-        output_path = await asyncio.to_thread(services.extract_video_frame, video_path, frame_type)
+        output_path = await asyncio.to_thread(services.extract_video_frame, video_path, frame_type, timestamp)
         return web.json_response({"success": True, "data": {"output": output_path}})
     except Exception as e:
         error_msg = f"Extract frame failed: {str(e)}"

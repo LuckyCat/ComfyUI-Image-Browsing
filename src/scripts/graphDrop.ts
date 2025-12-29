@@ -3,10 +3,17 @@ import { app } from 'scripts/comfyAPI'
 type DraggedItem = {
   fullname: string
   name: string
-  type: 'folder' | 'image' | 'video' | 'audio'
+  type: 'folder' | 'image' | 'video' | 'audio' | 'workflow' | 'prompt'
 }
 
 const MIME = 'application/x-comfyui-image-browsing'
+
+// Helper to get root type from path
+function getRootType(path: string): 'output' | 'workflows' | 'prompts' {
+  if (path.startsWith('/workflows')) return 'workflows'
+  if (path.startsWith('/prompts')) return 'prompts'
+  return 'output'
+}
 
 function isInsidePlugin(target: EventTarget | null) {
   // PrimeVue dialogs are teleported to <body>, so containment checks against our mount
@@ -36,7 +43,9 @@ async function fetchAsFile(item: DraggedItem): Promise<File> {
       ? 'video/mp4'
       : item.type === 'audio'
         ? 'audio/mpeg'
-        : 'image/png'
+        : item.type === 'workflow'
+          ? 'application/json'
+          : 'image/png'
   return new File([blob], item.name, { type: blob.type || fallbackType })
 }
 
@@ -170,6 +179,22 @@ export function installGraphDropHandler() {
 
     const node = getNodeAtEvent(ev)
     const nodeName = normalizeNodeName(node)
+    const rootType = getRootType(first.fullname)
+
+    // Workflows and prompts should not be dragged onto canvas (only within tree)
+    if (rootType === 'workflows' || rootType === 'prompts') {
+      // CASE: Drop WORKFLOW onto canvas -> load workflow
+      if (first.type === 'workflow') {
+        try {
+          const file = await fetchAsFile(first)
+          app.handleFile(file)
+          console.log('[ImageBrowsing] Loading workflow from file:', first.name)
+        } catch (e) {
+          console.warn('[ImageBrowsing] Failed to load workflow:', e)
+        }
+      }
+      return
+    }
 
     // CASE 1: Drop IMAGE onto LoadImage node -> upload to input folder and set widget
     if (node && first.type === 'image' && isLoadImageNode(nodeName)) {

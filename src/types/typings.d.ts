@@ -1,9 +1,11 @@
 export type ContainerSize = { width: number; height: number }
 export type ContainerPosition = { left: number; top: number }
 
+export type RootFolderType = 'output' | 'workflows' | 'prompts'
+
 export interface DirectoryItem {
   name: string
-  type: 'folder' | 'image' | 'video' | 'audio'
+  type: 'folder' | 'image' | 'video' | 'audio' | 'workflow' | 'prompt'
   size: number
   fullname: string
   createdAt: number

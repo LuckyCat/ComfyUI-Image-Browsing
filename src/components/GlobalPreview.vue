@@ -24,6 +24,13 @@
       @prev="openPreviousVideo"
       @next="openNextVideo"
     ></PreviewVideo>
+
+    <PromptEditor
+      v-else-if="current?.type === 'prompt'"
+      :filepath="current.fullname"
+      :filename="current.name"
+      @close="close"
+    ></PromptEditor>
   </div>
 </template>
 
@@ -32,6 +39,7 @@ import { usePreview } from 'hooks/preview'
 import PreviewAudio from './PreviewAudio.vue'
 import PreviewImage from './PreviewImage.vue'
 import PreviewVideo from './PreviewVideo.vue'
+import PromptEditor from './PromptEditor.vue'
 
 const {
   visible,

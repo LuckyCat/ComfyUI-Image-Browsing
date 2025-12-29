@@ -6,10 +6,12 @@
   >
     <!-- Folder Tree Sidebar -->
     <div
+      ref="sidebarRef"
       :class="[
-        'folder-sidebar flex-shrink-0 border-r border-gray-700 overflow-hidden',
-        showSidebar ? 'w-64' : 'w-0',
+        'folder-sidebar flex-shrink-0 border-r border-gray-700 overflow-hidden relative',
+        showSidebar ? '' : 'w-0',
       ]"
+      :style="showSidebar ? { width: `${sidebarWidth}px` } : {}"
     >
       <FolderTree
         ref="folderTreeRef"
@@ -18,6 +20,12 @@
         @refresh="onRefresh"
         @move-files="onMoveFiles"
       />
+      <!-- Resize handle -->
+      <div 
+        v-if="showSidebar"
+        class="sidebar-resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-500/50"
+        @mousedown="startSidebarResize"
+      ></div>
     </div>
 
     <!-- Main Content -->
@@ -117,7 +125,18 @@
         @click="clearSelected"
         @contextmenu.stop="folderContext"
       >
-        <ResponseScroll :items="folderItems" :item-size="itemSize" class="h-full">
+        <!-- ListView for workflows and prompts -->
+        <ListView
+          v-if="isListViewMode"
+          :items="listItems"
+          :selected-items="selectedItems"
+          :root-type="currentRootType"
+          class="h-full"
+          @dragstart="onItemDragStart"
+        />
+
+        <!-- Grid view for output (media files) -->
+        <ResponseScroll v-else :items="folderItems" :item-size="itemSize" class="h-full">
           <template #item="{ item }">
             <div
               class="grid justify-center"
@@ -291,7 +310,7 @@
         </div>
 
         <div
-          v-show="!loading && folderItems.length === 0"
+          v-show="!loading && (isListViewMode ? listItems.length === 0 : folderItems.length === 0)"
           class="absolute left-0 top-0 h-full w-full"
         >
           <div class="pt-20 text-center">No Data</div>
@@ -300,7 +319,7 @@
 
       <div class="flex select-none justify-between px-4 py-2 text-sm">
         <div class="flex gap-4">
-          <span>{{ items.flat().length }} {{ $t('items') }}</span>
+          <span>{{ isListViewMode ? listItems.length : items.flat().length }} {{ $t('items') }}</span>
           <span v-show="selectedItems.length > 0">
             {{ $t('selected') }}
             {{ selectedItems.length }}
@@ -335,6 +354,7 @@
 <script setup lang="ts">
 import FolderTree from 'components/FolderTree.vue'
 import LazyImage from 'components/LazyImage.vue'
+import ListView from 'components/ListView.vue'
 import ResponseInput from 'components/ResponseInput.vue'
 import ResponseScroll from 'components/ResponseScroll.vue'
 import ResponseSelect from 'components/ResponseSelect.vue'
@@ -351,15 +371,17 @@ import ContextMenu from 'primevue/contextmenu'
 import InputText from 'primevue/inputtext'
 import Tooltip from 'primevue/tooltip'
 import { DirectoryItem } from 'types/typings'
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 
 const vTooltip = Tooltip
 
 const { toast } = useToast()
 
 const container = ref<HTMLElement | null>(null)
+const sidebarRef = ref<HTMLElement | null>(null)
 const folderTreeRef = ref<InstanceType<typeof FolderTree> | null>(null)
 const showSidebar = ref(true)
+const sidebarWidth = ref(256)
 
 const {
   loading,
@@ -369,6 +391,7 @@ const {
   menuRef: menu,
   contextItems,
   confirmName,
+  currentRootType,
   refresh,
   entryFolder,
   folderContext,
@@ -387,9 +410,48 @@ const currentPath = computed(() => {
   return breadcrumb.value[breadcrumb.value.length - 1].fullname
 })
 
+// Check if we're in list view mode (workflows or prompts)
+const isListViewMode = computed(() => {
+  return currentRootType.value === 'workflows' || currentRootType.value === 'prompts'
+})
+
+// Sidebar resize
+let isResizingSidebar = false
+let sidebarResizeStartX = 0
+let sidebarResizeStartWidth = 0
+
+const startSidebarResize = (e: MouseEvent) => {
+  isResizingSidebar = true
+  sidebarResizeStartX = e.clientX
+  sidebarResizeStartWidth = sidebarWidth.value
+  document.addEventListener('mousemove', onSidebarResize)
+  document.addEventListener('mouseup', stopSidebarResize)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+const onSidebarResize = (e: MouseEvent) => {
+  if (!isResizingSidebar) return
+  const dx = e.clientX - sidebarResizeStartX
+  sidebarWidth.value = Math.max(150, Math.min(500, sidebarResizeStartWidth + dx))
+}
+
+const stopSidebarResize = () => {
+  isResizingSidebar = false
+  document.removeEventListener('mousemove', onSidebarResize)
+  document.removeEventListener('mouseup', stopSidebarResize)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+onUnmounted(() => {
+  document.removeEventListener('mousemove', onSidebarResize)
+  document.removeEventListener('mouseup', stopSidebarResize)
+})
+
 const cols = computed(() => {
-  const sidebarWidth = showSidebar.value ? 256 : 0
-  const containerWidth = width.value - sidebarWidth
+  const sw = showSidebar.value ? sidebarWidth.value : 0
+  const containerWidth = width.value - sw
   return Math.max(1, Math.floor(containerWidth / itemSize.value))
 })
 
@@ -398,6 +460,13 @@ const folderItems = computed(() => {
     return item.name.toLowerCase().includes(searchContent.value.toLowerCase())
   })
   return chunk(filterItems, cols.value)
+})
+
+// Flat list for ListView
+const listItems = computed(() => {
+  return items.value.filter((item) => {
+    return item.name.toLowerCase().includes(searchContent.value.toLowerCase())
+  })
 })
 
 const currentFolderName = computed(() => {

@@ -1,64 +1,68 @@
 <template>
   <div class="folder-tree h-full overflow-auto" @contextmenu.prevent>
     <div class="py-2">
-      <!-- Root output folder -->
-      <div
-        :class="[
-          'node-item flex items-center gap-1 cursor-pointer rounded px-2 py-1 mx-1',
-          'hover:bg-gray-700',
-          'transition-colors duration-150',
-          selectedPath === rootNode.fullname ? 'bg-gray-700' : '',
-          dragOverPath === rootNode.fullname ? 'bg-blue-600/50 ring-2 ring-blue-400' : '',
-        ]"
-        style="padding-left: 8px"
-        @click="onSelectFolder(rootNode.fullname)"
-        @contextmenu.stop.prevent="onContextMenu($event, rootNode)"
-        @dragover.prevent="onDragOver($event, rootNode)"
-        @dragleave="onDragLeave"
-        @drop="onDrop($event, rootNode)"
-      >
-        <span
-          class="expand-icon w-4 h-4 flex items-center justify-center"
-          @click.stop="onToggleExpand(rootNode)"
-        >
-          <i
-            :class="[
-              'pi text-xs transition-transform duration-200',
-              expandedPaths.has(rootNode.fullname) ? 'pi-chevron-down' : 'pi-chevron-right',
-            ]"
-          ></i>
-        </span>
-        
-        <span class="folder-icon w-4 h-4 flex items-center justify-center">
-          <i :class="['pi', expandedPaths.has(rootNode.fullname) ? 'pi-folder-open' : 'pi-folder']" style="color: #FFCA28;"></i>
-        </span>
-        
-        <span class="node-name truncate flex-1">{{ rootNode.name }}</span>
-        
-        <span v-if="rootNode.fileCount !== undefined" class="file-count text-xs text-gray-500 ml-1">
-          {{ rootNode.fileCount }}
-        </span>
-      </div>
-      
-      <!-- Child folders -->
-      <div v-if="expandedPaths.has(rootNode.fullname) && rootNode.children">
-        <FolderTreeNode
-          v-for="child in rootNode.children"
-          :key="child.fullname"
-          :node="child"
-          :level="1"
-          :expanded-paths="expandedPaths"
-          :selected-path="selectedPath"
-          :drag-over-path="dragOverPath"
-          :cached-folders="cachedFolderSet"
-          @select="onSelectFolder"
-          @toggle="onToggleExpand"
-          @contextmenu="onContextMenu"
-          @dragover="onDragOver"
+      <!-- Root folders -->
+      <template v-for="rootNode in rootNodes" :key="rootNode.fullname">
+        <div
+          :class="[
+            'node-item flex items-center gap-1 cursor-pointer rounded px-2 py-1 mx-1',
+            'hover:bg-gray-700',
+            'transition-colors duration-150',
+            selectedPath === rootNode.fullname ? 'bg-gray-700' : '',
+            dragOverPath === rootNode.fullname ? 'bg-blue-600/50 ring-2 ring-blue-400' : '',
+          ]"
+          style="padding-left: 8px"
+          @click="onSelectFolder(rootNode.fullname)"
+          @contextmenu.stop.prevent="onContextMenu($event, rootNode)"
+          @dragover.prevent="onDragOver($event, rootNode)"
           @dragleave="onDragLeave"
-          @drop="onDrop"
-        />
-      </div>
+          @drop="onDrop($event, rootNode)"
+        >
+          <span
+            class="expand-icon w-4 h-4 flex items-center justify-center"
+            @click.stop="onToggleExpand(rootNode)"
+          >
+            <i
+              v-if="rootNode.hasSubfolders !== false"
+              :class="[
+                'pi text-xs transition-transform duration-200',
+                expandedPaths.has(rootNode.fullname) ? 'pi-chevron-down' : 'pi-chevron-right',
+              ]"
+            ></i>
+          </span>
+          
+          <span class="folder-icon w-4 h-4 flex items-center justify-center">
+            <i :class="['pi', expandedPaths.has(rootNode.fullname) ? 'pi-folder-open' : 'pi-folder']" :style="{ color: getRootColor(rootNode.fullname) }"></i>
+          </span>
+          
+          <span class="node-name truncate flex-1">{{ rootNode.name }}</span>
+          
+          <span v-if="rootNode.fileCount !== undefined && rootNode.fileCount > 0" class="file-count text-xs text-gray-500 ml-1">
+            {{ rootNode.fileCount }}
+          </span>
+        </div>
+        
+        <!-- Child folders -->
+        <div v-if="expandedPaths.has(rootNode.fullname) && rootNode.children">
+          <FolderTreeNode
+            v-for="child in rootNode.children"
+            :key="child.fullname"
+            :node="child"
+            :level="1"
+            :expanded-paths="expandedPaths"
+            :selected-path="selectedPath"
+            :drag-over-path="dragOverPath"
+            :cached-folders="cachedFolderSet"
+            :root-type="getRootType(rootNode.fullname)"
+            @select="onSelectFolder"
+            @toggle="onToggleExpand"
+            @contextmenu="onContextMenu"
+            @dragover="onDragOver"
+            @dragleave="onDragLeave"
+            @drop="onDrop"
+          />
+        </div>
+      </template>
     </div>
     
     <ContextMenu ref="contextMenuRef" :model="contextMenuItems" />
@@ -95,6 +99,7 @@ import ConfirmDialog from 'primevue/confirmdialog'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import type { MenuItem } from 'primevue/menuitem'
+import type { RootFolderType } from 'types/typings'
 
 const { cacheStatus } = useCacheStatus()
 
@@ -104,12 +109,11 @@ export interface TreeNode {
   children?: TreeNode[]
   loaded?: boolean
   fileCount?: number
-  hasSubfolders?: boolean  // Whether this folder has subfolders
+  hasSubfolders?: boolean
+  rootType?: RootFolderType
 }
 
-// Local storage for file counts cache
 const FILE_COUNTS_STORAGE_KEY = 'comfyui-image-browsing-folder-counts'
-// Local storage for "hasSubfolders" cache (helps hide expand arrows for true leaf folders)
 const SUBFOLDER_INFO_STORAGE_KEY = 'comfyui-image-browsing-has-subfolders'
 
 const loadCachedCounts = (): Record<string, number> => {
@@ -124,9 +128,7 @@ const loadCachedCounts = (): Record<string, number> => {
 const saveCachedCounts = (counts: Record<string, number>) => {
   try {
     localStorage.setItem(FILE_COUNTS_STORAGE_KEY, JSON.stringify(counts))
-  } catch {
-    // Ignore storage errors
-  }
+  } catch {}
 }
 
 const cachedFileCounts = ref<Record<string, number>>(loadCachedCounts())
@@ -143,9 +145,7 @@ const loadCachedSubfolders = (): Record<string, boolean> => {
 const saveCachedSubfolders = (info: Record<string, boolean>) => {
   try {
     localStorage.setItem(SUBFOLDER_INFO_STORAGE_KEY, JSON.stringify(info))
-  } catch {
-    // Ignore storage errors
-  }
+  } catch {}
 }
 
 const cachedHasSubfolders = ref<Record<string, boolean>>(loadCachedSubfolders())
@@ -160,18 +160,17 @@ const emit = defineEmits<{
   (e: 'moveFiles', files: string[], targetFolder: string): void
 }>()
 
-// Computed set for fast lookup of cached folders from cache status
 const cachedFolderSet = computed(() => new Set(cacheStatus.value.cached_folders || []))
 
 const { toast, confirm } = useToast()
 const { t } = useI18n()
 
-const rootNode = ref<TreeNode>({
-  name: 'output',
-  fullname: '/output',
-  children: [],
-  loaded: false,
-})
+// Three root nodes
+const rootNodes = ref<TreeNode[]>([
+  { name: 'output', fullname: '/output', children: [], loaded: false, rootType: 'output' },
+  { name: 'workflows', fullname: '/workflows', children: [], loaded: false, rootType: 'workflows' },
+  { name: 'prompts', fullname: '/prompts', children: [], loaded: false, rootType: 'prompts' },
+])
 
 const expandedPaths = ref<Set<string>>(new Set(['/output']))
 const contextMenuRef = ref()
@@ -184,17 +183,32 @@ const vFocus = {
   mounted: (el: HTMLInputElement) => el.focus(),
 }
 
+const getRootType = (fullname: string): RootFolderType => {
+  if (fullname.startsWith('/output')) return 'output'
+  if (fullname.startsWith('/workflows')) return 'workflows'
+  if (fullname.startsWith('/prompts')) return 'prompts'
+  return 'output'
+}
+
+const getRootColor = (fullname: string): string => {
+  const type = getRootType(fullname)
+  switch (type) {
+    case 'output': return '#FFCA28'
+    case 'workflows': return '#64B5F6'
+    case 'prompts': return '#81C784'
+    default: return '#FFCA28'
+  }
+}
+
 const loadChildren = async (node: TreeNode) => {
   if (node.loaded) return
 
   try {
     const resData = await request(node.fullname)
     
-    // Count files (non-folders) in current response
     const fileCount = resData.filter((item: any) => item.type !== 'folder').length
     node.fileCount = fileCount
     
-    // Cache this count
     cachedFileCounts.value[node.fullname] = fileCount
     saveCachedCounts(cachedFileCounts.value)
     
@@ -206,21 +220,18 @@ const loadChildren = async (node: TreeNode) => {
           name: item.name,
           fullname,
           children: [],
-          loaded: false,  // Not loaded yet
-          fileCount: cachedFileCounts.value[fullname],  // Use cached count if available
-          // Use cached subfolder info if available, otherwise keep unknown until fetched.
+          loaded: false,
+          fileCount: cachedFileCounts.value[fullname],
           hasSubfolders: cachedHasSubfolders.value[fullname],
+          rootType: node.rootType || getRootType(node.fullname),
         } as TreeNode
       })
       .sort((a: TreeNode, b: TreeNode) => a.name.localeCompare(b.name))
     
-    // Mark that this node has subfolders
     node.hasSubfolders = folders.length > 0
-    
     node.children = folders
     node.loaded = true
     
-    // Fetch file counts for subfolders in background
     if (folders.length > 0) {
       fetchFolderCounts(node.fullname)
     }
@@ -230,25 +241,24 @@ const loadChildren = async (node: TreeNode) => {
 }
 
 const fetchFolderCounts = async (folderPath: string) => {
+  // Only fetch counts for output folder (workflows/prompts don't need thumbnail counts)
+  if (!folderPath.startsWith('/output')) return
+  
   try {
     const response = await request(`/folder-counts${folderPath}`)
     if (response && typeof response === 'object') {
-      // Handle new format with counts and hasSubfolders
       const counts = response.counts || response
       const subfolderInfo = response.hasSubfolders || {}
       
-      // Update counts for all folders and cache them
       Object.assign(cachedFileCounts.value, counts)
       saveCachedCounts(cachedFileCounts.value)
       
-      // Update counts in tree nodes
-      updateNodeCounts(rootNode.value, counts)
+      updateNodeCounts(counts)
       
-      // Update hasSubfolders info
       if (Object.keys(subfolderInfo).length > 0) {
         Object.assign(cachedHasSubfolders.value, subfolderInfo)
         saveCachedSubfolders(cachedHasSubfolders.value)
-        updateNodeHasSubfolders(rootNode.value, subfolderInfo)
+        updateNodeHasSubfolders(subfolderInfo)
       }
     }
   } catch (err) {
@@ -256,28 +266,76 @@ const fetchFolderCounts = async (folderPath: string) => {
   }
 }
 
-const updateNodeCounts = (node: TreeNode, counts: Record<string, number>) => {
-  if (counts[node.fullname] !== undefined) {
-    node.fileCount = counts[node.fullname]
+const updateNodeCounts = (counts: Record<string, number>) => {
+  const updateNode = (node: TreeNode) => {
+    if (counts[node.fullname] !== undefined) {
+      node.fileCount = counts[node.fullname]
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        updateNode(child)
+      }
+    }
   }
   
-  if (node.children) {
-    for (const child of node.children) {
-      updateNodeCounts(child, counts)
-    }
+  for (const root of rootNodes.value) {
+    updateNode(root)
   }
 }
 
-const updateNodeHasSubfolders = (node: TreeNode, subfolderInfo: Record<string, boolean>) => {
-  if (subfolderInfo[node.fullname] !== undefined) {
-    node.hasSubfolders = subfolderInfo[node.fullname]
-  }
-  
-  if (node.children) {
-    for (const child of node.children) {
-      updateNodeHasSubfolders(child, subfolderInfo)
+const updateNodeHasSubfolders = (subfolderInfo: Record<string, boolean>) => {
+  const updateNode = (node: TreeNode) => {
+    if (subfolderInfo[node.fullname] !== undefined) {
+      node.hasSubfolders = subfolderInfo[node.fullname]
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        updateNode(child)
+      }
     }
   }
+  
+  for (const root of rootNodes.value) {
+    updateNode(root)
+  }
+}
+
+const onSelectFolder = (path: string) => {
+  emit('select', path)
+}
+
+const onToggleExpand = async (node: TreeNode) => {
+  if (expandedPaths.value.has(node.fullname)) {
+    expandedPaths.value.delete(node.fullname)
+  } else {
+    await loadChildren(node)
+    expandedPaths.value.add(node.fullname)
+  }
+  expandedPaths.value = new Set(expandedPaths.value)
+}
+
+const findNode = (fullname: string): TreeNode | null => {
+  const searchInNode = (node: TreeNode): TreeNode | null => {
+    if (node.fullname === fullname) return node
+    if (node.children) {
+      for (const child of node.children) {
+        const found = searchInNode(child)
+        if (found) return found
+      }
+    }
+    return null
+  }
+  
+  for (const root of rootNodes.value) {
+    const found = searchInNode(root)
+    if (found) return found
+  }
+  return null
+}
+
+const findParentNode = (fullname: string): TreeNode | null => {
+  const parentPath = fullname.substring(0, fullname.lastIndexOf('/'))
+  return findNode(parentPath)
 }
 
 const reloadNode = async (node: TreeNode) => {
@@ -286,63 +344,40 @@ const reloadNode = async (node: TreeNode) => {
   await loadChildren(node)
 }
 
-const findParentNode = (targetPath: string): TreeNode | null => {
-  const parentPath = targetPath.substring(0, targetPath.lastIndexOf('/'))
-  if (!parentPath || parentPath === '') return rootNode.value
-  return findNode(rootNode.value, parentPath)
-}
-
-const onSelectFolder = async (path: string) => {
-  emit('select', path)
-}
-
-const onToggleExpand = async (node: TreeNode) => {
-  const path = node.fullname
-  
-  if (expandedPaths.value.has(path)) {
-    expandedPaths.value.delete(path)
-  } else {
-    await loadChildren(node)
-    expandedPaths.value.add(path)
-  }
-  expandedPaths.value = new Set(expandedPaths.value)
-}
-
 const onContextMenu = (event: MouseEvent, node: TreeNode) => {
   contextMenuNode.value = node
   
-  contextMenuItems.value = [
-    {
-      label: t('open'),
-      icon: 'pi pi-folder-open',
-      command: () => {
-        emit('select', node.fullname)
-      },
-    },
-    {
-      label: t('addFolder'),
-      icon: 'pi pi-folder-plus',
-      command: () => createSubfolder(node),
-    },
-    {
-      separator: true,
-    },
-    {
+  const rootType = getRootType(node.fullname)
+  const isRoot = rootNodes.value.some(r => r.fullname === node.fullname)
+  
+  const items: MenuItem[] = []
+  
+  // Add folder option (for all types)
+  items.push({
+    label: t('addFolder'),
+    icon: 'pi pi-folder-plus',
+    command: () => createFolder(node),
+  })
+  
+  if (!isRoot) {
+    items.push({
       label: t('rename'),
       icon: 'pi pi-file-edit',
       command: () => renameFolder(node),
-    },
-    {
+    })
+    
+    items.push({
       label: t('delete'),
       icon: 'pi pi-trash',
       command: () => deleteFolder(node),
-    },
-  ]
+    })
+  }
   
+  contextMenuItems.value = items
   contextMenuRef.value.show(event)
 }
 
-const createSubfolder = (parentNode: TreeNode) => {
+const createFolder = (parentNode: TreeNode) => {
   confirmName.value = t('newFolderName')
   
   confirm.require({
@@ -367,7 +402,6 @@ const createSubfolder = (parentNode: TreeNode) => {
           life: 2000,
         })
         
-        // Reload parent and expand
         await reloadNode(parentNode)
         expandedPaths.value.add(parentNode.fullname)
         expandedPaths.value = new Set(expandedPaths.value)
@@ -410,7 +444,6 @@ const renameFolder = (node: TreeNode) => {
           life: 2000,
         })
         
-        // Reload parent node
         const parentNode = findParentNode(node.fullname)
         if (parentNode) {
           await reloadNode(parentNode)
@@ -460,7 +493,6 @@ const deleteFolder = (node: TreeNode) => {
           life: 2000,
         })
         
-        // Reload parent node
         const parentNode = findParentNode(node.fullname)
         if (parentNode) {
           await reloadNode(parentNode)
@@ -480,9 +512,23 @@ const deleteFolder = (node: TreeNode) => {
 }
 
 const onDragOver = (event: DragEvent, node: TreeNode) => {
+  // Only allow drag over for same root type
+  const filesJson = event.dataTransfer?.getData('application/json')
+  if (filesJson) {
+    try {
+      const files = JSON.parse(filesJson)
+      if (files && files.length > 0) {
+        const sourceRoot = getRootType(files[0])
+        const targetRoot = getRootType(node.fullname)
+        if (sourceRoot !== targetRoot) {
+          return // Don't allow cross-root drag
+        }
+      }
+    } catch {}
+  }
+  
   event.preventDefault()
   event.stopPropagation()
-  ;(event as any).stopImmediatePropagation?.()
   dragOverPath.value = node.fullname
 }
 
@@ -493,21 +539,28 @@ const onDragLeave = () => {
 const onDrop = async (event: DragEvent, node: TreeNode) => {
   event.preventDefault()
   event.stopPropagation()
-  ;(event as any).stopImmediatePropagation?.()
   dragOverPath.value = null
   
-  // Get dragged files from dataTransfer
   const filesJson = event.dataTransfer?.getData('application/json')
   if (!filesJson) return
   
   try {
     const files = JSON.parse(filesJson)
     if (files && files.length > 0) {
+      // Validate same root type
+      const sourceRoot = getRootType(files[0])
+      const targetRoot = getRootType(node.fullname)
+      if (sourceRoot !== targetRoot) {
+        toast.add({
+          severity: 'warn',
+          summary: 'Warning',
+          detail: `Cannot move files between ${sourceRoot} and ${targetRoot}`,
+          life: 3000,
+        })
+        return
+      }
+      
       emit('moveFiles', files, node.fullname)
-      // IMPORTANT: Don't immediately reload here.
-      // The actual move happens asynchronously in the parent (server-side). Reloading now can
-      // race with filesystem operations and leave the node in a "loaded but empty" state.
-      // The parent refresh will take care of rebuilding the tree.
     }
   } catch (err) {
     console.error('Failed to parse drop data:', err)
@@ -524,7 +577,7 @@ watch(() => props.selectedPath, async (newPath) => {
   for (const part of parts) {
     currentPath += '/' + part
     if (!expandedPaths.value.has(currentPath)) {
-      const node = findNode(rootNode.value, currentPath)
+      const node = findNode(currentPath)
       if (node) {
         await loadChildren(node)
         expandedPaths.value.add(currentPath)
@@ -534,64 +587,50 @@ watch(() => props.selectedPath, async (newPath) => {
   expandedPaths.value = new Set(expandedPaths.value)
 }, { immediate: true })
 
-const findNode = (node: TreeNode, path: string): TreeNode | null => {
-  if (node.fullname === path) return node
-  
-  if (node.children) {
-    for (const child of node.children) {
-      const found = findNode(child, path)
-      if (found) return found
-    }
-  }
-  
-  return null
-}
-
 onMounted(async () => {
-  await loadChildren(rootNode.value)
-  // Fetch counts for all visible folders
+  // Load children for all root nodes
+  for (const root of rootNodes.value) {
+    await loadChildren(root)
+  }
   fetchFolderCounts('/output')
 })
 
-// Watch for folder counts updates from caching process
 watch(() => cacheStatus.value.folder_counts, (newCounts) => {
   if (newCounts && Object.keys(newCounts).length > 0) {
-    // Convert real paths to virtual paths and update nodes
     const virtualCounts: Record<string, number> = {}
     for (const [realPath, count] of Object.entries(newCounts)) {
-      // Extract the path after 'output' folder
       const match = realPath.replace(/\\/g, '/').match(/output(.*)$/)
       if (match) {
         const virtualPath = '/output' + match[1]
         virtualCounts[virtualPath] = count
-        // Also cache it
         cachedFileCounts.value[virtualPath] = count
       }
     }
     
     if (Object.keys(virtualCounts).length > 0) {
-      updateNodeCounts(rootNode.value, virtualCounts)
+      updateNodeCounts(virtualCounts)
       saveCachedCounts(cachedFileCounts.value)
     }
   }
 }, { deep: true })
 
-// Expose refresh method
 const refreshTree = async () => {
-  rootNode.value.loaded = false
-  rootNode.value.children = []
-  // Reset expansion to a safe baseline to avoid stale expanded paths after move/delete.
+  for (const root of rootNodes.value) {
+    root.loaded = false
+    root.children = []
+    await loadChildren(root)
+  }
   expandedPaths.value = new Set(['/output'])
-  await loadChildren(rootNode.value)
-  // Refresh counts + hasSubfolders in background
   fetchFolderCounts('/output')
 }
 
 const refreshNode = async (path: string) => {
-  const node = findNode(rootNode.value, path)
+  const node = findNode(path)
   if (node) {
     await reloadNode(node)
-    fetchFolderCounts(path)
+    if (path.startsWith('/output')) {
+      fetchFolderCounts(path)
+    }
   }
 }
 

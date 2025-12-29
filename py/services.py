@@ -362,6 +362,260 @@ def scan_directory_items(directory: str):
     return result
 
 
+def scan_workflows_directory(directory: str):
+    """Scan directory for workflow files (.json) and folders"""
+    result = []
+    
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                try:
+                    stat = entry.stat()
+                    is_dir = entry.is_dir()
+                    
+                    # Only include folders and .json files
+                    if is_dir:
+                        result.append({
+                            "name": entry.name,
+                            "type": "folder",
+                            "size": 0,
+                            "createdAt": round(stat.st_ctime_ns / 1000000),
+                            "updatedAt": round(stat.st_mtime_ns / 1000000),
+                        })
+                    elif entry.name.lower().endswith('.json'):
+                        result.append({
+                            "name": entry.name,
+                            "type": "workflow",
+                            "size": stat.st_size,
+                            "createdAt": round(stat.st_ctime_ns / 1000000),
+                            "updatedAt": round(stat.st_mtime_ns / 1000000),
+                        })
+                except OSError:
+                    pass
+    except OSError:
+        return []
+    
+    return result
+
+
+def scan_prompts_directory(directory: str):
+    """Scan directory for prompt files (.txt) and folders"""
+    result = []
+    
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                try:
+                    stat = entry.stat()
+                    is_dir = entry.is_dir()
+                    
+                    # Only include folders and .txt files
+                    if is_dir:
+                        result.append({
+                            "name": entry.name,
+                            "type": "folder",
+                            "size": 0,
+                            "createdAt": round(stat.st_ctime_ns / 1000000),
+                            "updatedAt": round(stat.st_mtime_ns / 1000000),
+                        })
+                    elif entry.name.lower().endswith('.txt'):
+                        result.append({
+                            "name": entry.name,
+                            "type": "prompt",
+                            "size": stat.st_size,
+                            "createdAt": round(stat.st_ctime_ns / 1000000),
+                            "updatedAt": round(stat.st_mtime_ns / 1000000),
+                        })
+                except OSError:
+                    pass
+    except OSError:
+        return []
+    
+    return result
+
+
+def get_real_path_for_type(filepath: str):
+    """Get real filesystem path based on virtual path type"""
+    if filepath.startswith("/output"):
+        return utils.get_real_output_filepath(filepath)
+    elif filepath.startswith("/workflows"):
+        return utils.get_real_workflows_filepath(filepath)
+    elif filepath.startswith("/prompts"):
+        return utils.get_real_prompts_filepath(filepath)
+    return filepath
+
+
+async def create_file_or_folder_generic(pathname: str, reader, folder_type: str):
+    """Create file or folder in any folder type"""
+    real_pathname = get_real_path_for_type(pathname)
+    
+    while True:
+        part = await reader.next()
+        if part is None:
+            break
+
+        name = part.name
+
+        if name == "files":
+            filename = part.filename
+            filepath = f"{real_pathname}/{filename}"
+            while True:
+                if not os.path.exists(filepath):
+                    break
+                filepath_0 = os.path.splitext(filepath)[0]
+                filepath_1 = os.path.splitext(filepath)[1]
+                filepath = f"{filepath_0}(1){filepath_1}"
+
+            utils.print_debug(f"Creating file: {filepath}")
+            with open(filepath, "wb") as f:
+                while True:
+                    chunk = await part.read_chunk()
+                    if not chunk:
+                        break
+                    f.write(chunk)
+
+        if name == "folders":
+            filename = await part.text()
+            filepath = f"{real_pathname}/{filename}"
+            if os.path.exists(filepath):
+                raise RuntimeError(f"filename '{filename}' was existed.")
+            utils.print_debug(f"Create folder: {filepath}")
+            os.mkdir(filepath)
+    
+    # Invalidate cache for the directory
+    cache_helper.rm_cache(real_pathname)
+
+
+def rename_file_generic(pathname: str, filename: str, folder_type: str):
+    """Rename file in any folder type"""
+    real_pathname = get_real_path_for_type(pathname)
+    real_filename = get_real_path_for_type(filename)
+    shutil.move(real_pathname, real_filename)
+    
+    # Invalidate cache
+    parent_dir = os.path.dirname(real_pathname)
+    cache_helper.rm_cache(parent_dir)
+
+
+def recursive_delete_files_generic(file_list: list[str]):
+    """Delete files from any folder type"""
+    dirs_to_invalidate = set()
+    
+    for file_path in file_list:
+        real_path = get_real_path_for_type(file_path)
+        dirs_to_invalidate.add(os.path.dirname(real_path))
+
+        if os.path.isfile(real_path):
+            os.remove(real_path)
+        elif os.path.islink(real_path):
+            os.unlink(real_path)
+        elif os.path.isdir(real_path):
+            shutil.rmtree(real_path)
+    
+    # Invalidate cache for affected directories
+    for dir_path in dirs_to_invalidate:
+        cache_helper.rm_cache(dir_path)
+
+
+def move_files_generic(file_list: list[str], target_folder: str):
+    """Move files within the same root folder type"""
+    if not file_list:
+        return
+    
+    # Get root type of first file and target
+    first_root = utils.get_root_type(file_list[0])
+    target_root = utils.get_root_type(target_folder)
+    
+    # Validate all files are from the same root type
+    for file_path in file_list:
+        file_root = utils.get_root_type(file_path)
+        if file_root != first_root:
+            raise RuntimeError("Cannot move files from different root folders")
+    
+    # Validate target is same root type
+    if first_root != target_root:
+        raise RuntimeError(f"Cannot move {first_root} files to {target_root} folder")
+    
+    dirs_to_invalidate = set()
+    
+    real_target = get_real_path_for_type(target_folder)
+    
+    if not os.path.isdir(real_target):
+        raise RuntimeError(f"Target folder does not exist: {target_folder}")
+    
+    dirs_to_invalidate.add(real_target)
+    
+    for file_path in file_list:
+        real_path = get_real_path_for_type(file_path)
+        
+        if not os.path.exists(real_path):
+            continue
+        
+        # Add source directory to invalidate
+        dirs_to_invalidate.add(os.path.dirname(real_path))
+        
+        # Get filename and create destination path
+        filename = os.path.basename(real_path)
+        dest_path = os.path.join(real_target, filename)
+        
+        # Handle name conflicts
+        if os.path.exists(dest_path):
+            base, ext = os.path.splitext(filename)
+            counter = 1
+            while os.path.exists(dest_path):
+                dest_path = os.path.join(real_target, f"{base}({counter}){ext}")
+                counter += 1
+        
+        shutil.move(real_path, dest_path)
+        utils.print_debug(f"Moved {real_path} to {dest_path}")
+    
+    # Invalidate cache for affected directories
+    for dir_path in dirs_to_invalidate:
+        cache_helper.rm_cache(dir_path)
+
+
+import re
+
+def duplicate_workflow(file_path: str) -> str:
+    """Duplicate a workflow file with incremented number"""
+    real_path = get_real_path_for_type(file_path)
+    
+    if not os.path.isfile(real_path):
+        raise RuntimeError(f"File not found: {file_path}")
+    
+    directory = os.path.dirname(real_path)
+    filename = os.path.basename(real_path)
+    name, ext = os.path.splitext(filename)
+    
+    # Check if name ends with a number
+    match = re.match(r'^(.+?)(\d+)$', name)
+    if match:
+        base_name = match.group(1)
+        number = int(match.group(2)) + 1
+    else:
+        base_name = name
+        number = 1
+    
+    # Find next available number
+    new_name = f"{base_name}{number}{ext}"
+    new_path = os.path.join(directory, new_name)
+    
+    while os.path.exists(new_path):
+        number += 1
+        new_name = f"{base_name}{number}{ext}"
+        new_path = os.path.join(directory, new_name)
+    
+    # Copy the file
+    shutil.copy2(real_path, new_path)
+    
+    # Invalidate cache
+    cache_helper.rm_cache(directory)
+    
+    # Return virtual path
+    folder_virtual = os.path.dirname(file_path)
+    return f"{folder_virtual}/{new_name}"
+
+
 def get_folder_counts(folder_path: str) -> dict:
     """
     Get file counts and subfolder info for a folder and its subfolders.
@@ -639,15 +893,16 @@ def merge_videos(file_list: list[str], output_name: str) -> str:
     return new_fullname
 
 
-def extract_video_frame(video_path: str, frame_type: str = "first") -> str:
+def extract_video_frame(video_path: str, frame_type: str = "first", timestamp: float = 0) -> str:
     """
-    Extract first or last frame from a video file.
+    Extract first, last, or current frame from a video file.
     Returns the output filename (e.g. /output/sub/video_first_frame.png).
     Requires ffmpeg in PATH.
     
     Args:
         video_path: Virtual path to video (e.g., /output/folder/video.mp4)
-        frame_type: "first" or "last"
+        frame_type: "first", "last", or "current"
+        timestamp: Time in seconds for "current" frame type
     """
     real_path = utils.get_real_output_filepath(video_path)
     
@@ -660,7 +915,14 @@ def extract_video_frame(video_path: str, frame_type: str = "first") -> str:
     # Get video info to find last frame
     out_dir = os.path.dirname(real_path)
     base_name = os.path.splitext(os.path.basename(real_path))[0]
-    suffix = "first_frame" if frame_type == "first" else "last_frame"
+    
+    if frame_type == "current":
+        suffix = f"frame_{int(timestamp*1000)}ms"
+    elif frame_type == "first":
+        suffix = "first_frame"
+    else:
+        suffix = "last_frame"
+    
     output_name = f"{base_name}_{suffix}.png"
     output_path = os.path.join(out_dir, output_name)
     
@@ -678,6 +940,19 @@ def extract_video_frame(video_path: str, frame_type: str = "first") -> str:
             "-hide_banner",
             "-loglevel", "error",
             "-y",
+            "-i", real_path,
+            "-vframes", "1",
+            "-q:v", "1",
+            output_path
+        ]
+    elif frame_type == "current":
+        # Extract frame at specific timestamp
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-y",
+            "-ss", str(timestamp),
             "-i", real_path,
             "-vframes", "1",
             "-q:v", "1",

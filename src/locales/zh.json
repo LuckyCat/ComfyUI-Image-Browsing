@@ -21,6 +21,12 @@
   "thumbnailSize": "缩略图大小",
   "extractFirstFrame": "提取首帧",
   "extractLastFrame": "提取尾帧",
+  "duplicate": "复制",
+  "name": "名称",
+  "dateModified": "修改日期",
+  "workflows": "工作流",
+  "prompts": "提示词",
+  "output": "输出",
   "size": {
     "small": "小",
     "medium": "中",

@@ -31,7 +31,7 @@
       <span class="folder-icon w-4 h-4 flex items-center justify-center">
         <i 
           :class="['pi', isExpanded ? 'pi-folder-open' : 'pi-folder']" 
-          :style="{ color: isCached ? '#FFCA28' : '#A08620', opacity: isCached ? 1 : 0.7 }"
+          :style="{ color: folderColor, opacity: isCached ? 1 : 0.7 }"
         ></i>
       </span>
       
@@ -55,6 +55,7 @@
         :selected-path="selectedPath"
         :drag-over-path="dragOverPath"
         :cached-folders="cachedFolders"
+        :root-type="rootType"
         @select="$emit('select', $event)"
         @toggle="$emit('toggle', $event)"
         @contextmenu="(e, n) => $emit('contextmenu', e, n)"
@@ -69,6 +70,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { TreeNode } from './FolderTree.vue'
+import type { RootFolderType } from 'types/typings'
 
 const props = defineProps<{
   node: TreeNode
@@ -77,6 +79,7 @@ const props = defineProps<{
   selectedPath: string
   dragOverPath: string | null
   cachedFolders?: Set<string>
+  rootType?: RootFolderType
 }>()
 
 const emit = defineEmits<{
@@ -93,18 +96,34 @@ const isSelected = computed(() => props.selectedPath === props.node.fullname)
 const hasChildren = computed(() => props.node.children && props.node.children.length > 0)
 const isDragOver = computed(() => props.dragOverPath === props.node.fullname)
 
-// Check if this folder is cached
+// Folder color based on root type
+const folderColor = computed(() => {
+  if (isCached.value) {
+    switch (props.rootType) {
+      case 'output': return '#FFCA28'
+      case 'workflows': return '#64B5F6'
+      case 'prompts': return '#81C784'
+      default: return '#FFCA28'
+    }
+  }
+  // Dimmed colors for non-cached
+  switch (props.rootType) {
+    case 'output': return '#A08620'
+    case 'workflows': return '#4682B4'
+    case 'prompts': return '#5D8A5F'
+    default: return '#A08620'
+  }
+})
+
+// Check if this folder is cached (only relevant for output)
 const isCached = computed(() => {
+  if (props.rootType !== 'output') return true // Always "cached" for non-output folders
   if (!props.cachedFolders || props.cachedFolders.size === 0) return false
   
-  // cachedFolders contains real filesystem paths like C:\...\output\folder
-  // node.fullname is like /output/folder
-  // We need to check if any cached path ends with the folder structure
   const nodePath = props.node.fullname.replace(/^\/output/, '').replace(/\//g, '\\')
   const nodePathUnix = props.node.fullname.replace(/^\/output/, '')
   
   for (const cachedPath of props.cachedFolders) {
-    // Check both Windows and Unix path endings
     if (cachedPath.endsWith(nodePath) || cachedPath.endsWith(nodePathUnix) ||
         cachedPath.endsWith(nodePath.replace(/\\/g, '/')) ||
         cachedPath.replace(/\\/g, '/').endsWith(nodePathUnix)) {
@@ -114,15 +133,10 @@ const isCached = computed(() => {
   return false
 })
 
-// Show expand icon only if:
-// 1. Node has children (loaded and has subfolders), OR
-// 2. Node has hasSubfolders explicitly set to true, OR
-// 3. Node is not loaded yet (we don't know if it has subfolders)
 const showExpandIcon = computed(() => {
   if (hasChildren.value) return true
   if (props.node.hasSubfolders === true) return true
   if (props.node.hasSubfolders === false) return false
-  // Not loaded yet - show icon so user can try to expand
   if (!props.node.loaded) return true
   return false
 })

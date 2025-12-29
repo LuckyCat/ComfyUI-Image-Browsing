@@ -21,6 +21,12 @@
   "thumbnailSize": "Thumbnail Size",
   "extractFirstFrame": "Extract First Frame",
   "extractLastFrame": "Extract Last Frame",
+  "duplicate": "Duplicate",
+  "name": "Name",
+  "dateModified": "Date Modified",
+  "workflows": "workflows",
+  "prompts": "prompts",
+  "output": "output",
   "size": {
     "small": "Small",
     "medium": "Medium",
