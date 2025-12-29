@@ -70,13 +70,19 @@ interface ScrollAreaProps {
   itemSize?: number
   scrollbar?: boolean
   rowKey?: string | ((item: T[]) => string)
+  /** Number of extra rows to render above and below the visible area */
+  overscan?: number
 }
 
 const props = withDefaults(defineProps<ScrollAreaProps>(), {
   scrollbar: true,
+  overscan: 5, // Larger overscan for smoother scrolling without flicker
 })
 
 const { width } = useContainerResize(viewport)
+
+// Track pending RAF to avoid duplicate calculations
+const rafPending = ref(false)
 
 useContainerScroll(viewport, {
   onScroll: (e) => {
@@ -98,7 +104,14 @@ useContainerScroll(viewport, {
     resolveOffset(scrollbars.value.horizontal, scrollbarAttrs.horizontal)
     resolveOffset(scrollbars.value.vertical, scrollbarAttrs.vertical)
 
-    calculateLoadItems()
+    // Use requestAnimationFrame for smoother updates during scroll
+    if (!rafPending.value) {
+      rafPending.value = true
+      requestAnimationFrame(() => {
+        calculateLoadItems()
+        rafPending.value = false
+      })
+    }
   },
 })
 
@@ -199,12 +212,16 @@ const calculateLoadItems = () => {
       const containerSize = container[attr.clientSize]
       const itemSize = props.itemSize!
       const viewCount = Math.ceil(containerSize / itemSize)
+      const overscan = props.overscan
 
+      // Calculate start with overscan buffer for smoother scrolling
       let start = Math.floor(container[attr.scrollOffset] / itemSize)
+      start = Math.max(0, start - overscan)
       const offset = start * itemSize
 
-      let end = start + viewCount
-      end = Math.min(end + viewCount, items.length)
+      // Calculate end with overscan buffer
+      let end = Math.floor(container[attr.scrollOffset] / itemSize) + viewCount
+      end = Math.min(end + overscan + 1, items.length)
 
       content.style.transform = `translateY(${offset}px)`
       return items.slice(start, end)

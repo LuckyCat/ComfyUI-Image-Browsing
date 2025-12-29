@@ -19,6 +19,8 @@
   "cancel": "Cancel",
   "confirm": "Confirm",
   "thumbnailSize": "Thumbnail Size",
+  "extractFirstFrame": "Extract First Frame",
+  "extractLastFrame": "Extract Last Frame",
   "size": {
     "small": "Small",
     "medium": "Medium",

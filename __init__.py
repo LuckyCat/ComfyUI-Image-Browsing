@@ -324,6 +324,25 @@ async def download_tmp_file(request):
         return web.json_response({"success": False, "error": error_msg})
 
 
+@routes.post("/image-browsing/extract-frame")
+async def extract_video_frame(request):
+    """Extract first or last frame from a video file"""
+    try:
+        data = await request.json()
+        video_path = data.get("video_path", None)
+        frame_type = data.get("frame_type", "first")  # "first" or "last"
+        
+        if not video_path:
+            return web.json_response({"success": False, "error": "Missing video_path"}, status=400)
+        
+        output_path = await asyncio.to_thread(services.extract_video_frame, video_path, frame_type)
+        return web.json_response({"success": True, "data": {"output": output_path}})
+    except Exception as e:
+        error_msg = f"Extract frame failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
 WEB_DIRECTORY = "web"
 NODE_CLASS_MAPPINGS = {}
 __all__ = ["NODE_CLASS_MAPPINGS"]

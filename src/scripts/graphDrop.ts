@@ -114,10 +114,33 @@ function setNodeWidgetValue(node: any, value: string, keys: string[]) {
 }
 
 /**
+ * Check if a node is a LoadImage-type node
+ */
+function isLoadImageNode(nodeName: string): boolean {
+  const n = nodeName.toLowerCase().replace(/\s+/g, '')
+  return n.includes('loadimage') || n.includes('load_image')
+}
+
+/**
+ * Check if a node is a LoadVideo-type node
+ */
+function isLoadVideoNode(nodeName: string): boolean {
+  const n = nodeName.toLowerCase().replace(/\s+/g, '')
+  return (
+    n.includes('loadvideo') ||
+    n.includes('load_video') ||
+    n.includes('vhs_loadvideo') ||
+    n.includes('vhsloadvideo') ||
+    n.includes('videocombine') ||
+    n.includes('loadvideopath')
+  )
+}
+
+/**
  * Enables:
  * - Drag image -> LoadImage node (uploads to input and sets widget, does NOT auto-load workflow)
  * - Drag video -> LoadVideo node (uploads to input and sets widget)
- * - Drag image -> empty graph loads workflow (embedded metadata)
+ * - Drag image -> empty canvas (not on any node) loads workflow (embedded metadata)
  */
 export function installGraphDropHandler() {
   const w = window as any
@@ -146,43 +169,63 @@ export function installGraphDropHandler() {
     if (!first) return
 
     const node = getNodeAtEvent(ev)
-    const n = normalizeNodeName(node)
+    const nodeName = normalizeNodeName(node)
 
-    // Drop on node: treat as file input, not as workflow.
-    if (node && first.type === 'image' && n.includes('loadimage')) {
+    // CASE 1: Drop IMAGE onto LoadImage node -> upload to input folder and set widget
+    if (node && first.type === 'image' && isLoadImageNode(nodeName)) {
       try {
         const file = await fetchAsFile(first)
         const uploaded = await uploadToInput(file)
         setNodeWidgetValue(node, uploaded, ['image', 'filename', 'file'])
+        console.log('[ImageBrowsing] Uploaded image to LoadImage node:', uploaded)
       } catch (e) {
         console.warn('[ImageBrowsing] Failed to drop image onto LoadImage:', e)
       }
       return
     }
 
-    if (
-      node &&
-      first.type === 'video' &&
-      (n.includes('loadvideo') || n.includes('vhs_loadvideo') || n.includes('vhsloadvideo'))
-    ) {
+    // CASE 2: Drop VIDEO onto LoadVideo node -> upload to input folder and set widget
+    if (node && first.type === 'video' && isLoadVideoNode(nodeName)) {
       try {
         const file = await fetchAsFile(first)
         const uploaded = await uploadToInput(file)
         setNodeWidgetValue(node, uploaded, ['video', 'filename', 'file'])
+        console.log('[ImageBrowsing] Uploaded video to LoadVideo node:', uploaded)
       } catch (e) {
         console.warn('[ImageBrowsing] Failed to drop video onto LoadVideo:', e)
       }
       return
     }
 
-    // Empty graph: load workflow only for images.
-    if (first.type === 'image') {
+    // CASE 3: Drop IMAGE onto empty canvas (no node) -> load workflow from image metadata
+    if (!node && first.type === 'image') {
       try {
         const file = await fetchAsFile(first)
         app.handleFile(file)
+        console.log('[ImageBrowsing] Loading workflow from image:', first.name)
       } catch (e) {
-        console.warn('[ImageBrowsing] Failed to drop image to load workflow:', e)
+        console.warn('[ImageBrowsing] Failed to load workflow from image:', e)
       }
+      return
+    }
+
+    // CASE 4: Drop IMAGE onto a node that is NOT LoadImage -> load workflow
+    // This handles the case where user drops on some other node by accident
+    if (node && first.type === 'image' && !isLoadImageNode(nodeName)) {
+      try {
+        const file = await fetchAsFile(first)
+        app.handleFile(file)
+        console.log('[ImageBrowsing] Loading workflow from image (dropped on non-LoadImage node):', first.name)
+      } catch (e) {
+        console.warn('[ImageBrowsing] Failed to load workflow from image:', e)
+      }
+      return
+    }
+
+    // CASE 5: Drop VIDEO onto empty canvas or non-LoadVideo node -> do nothing special
+    // Videos don't have workflow metadata, so we just ignore
+    if (first.type === 'video') {
+      console.log('[ImageBrowsing] Video dropped on empty canvas or wrong node type - ignored')
     }
   }
 

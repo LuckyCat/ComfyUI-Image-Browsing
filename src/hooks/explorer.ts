@@ -279,6 +279,37 @@ export const useExplorer = defineStore('explorer', (store) => {
     }
   }
 
+  const extractVideoFrame = async (item: DirectoryItem, frameType: 'first' | 'last') => {
+    loading.value = true
+    try {
+      await request('/extract-frame', {
+        method: 'POST',
+        body: JSON.stringify({
+          video_path: item.fullname,
+          frame_type: frameType,
+        }),
+      })
+      
+      toast.add({
+        severity: 'success',
+        summary: 'Success',
+        detail: `Extracted ${frameType} frame successfully.`,
+        life: 3000,
+      })
+      
+      await refresh()
+    } catch (err: any) {
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || `Failed to extract ${frameType} frame.`,
+        life: 5000,
+      })
+    } finally {
+      loading.value = false
+    }
+  }
+
   const renameItem = (item: DirectoryItem) => {
     confirmName.value = item.name
 
@@ -410,6 +441,21 @@ export const useExplorer = defineStore('explorer', (store) => {
         )
       }
 
+      // Video-specific options: Extract First/Last Frame
+      if (item.type === 'video') {
+        contextMenu.push(
+          {
+            label: t('extractFirstFrame'),
+            icon: 'pi pi-step-backward',
+            command: () => extractVideoFrame(item, 'first'),
+          },
+          {
+            label: t('extractLastFrame'),
+            icon: 'pi pi-step-forward',
+            command: () => extractVideoFrame(item, 'last'),
+          },
+        )
+      }
 
       const canMergeVideos =
         selectedItems.value.length >= 2 &&

@@ -638,6 +638,120 @@ def merge_videos(file_list: list[str], output_name: str) -> str:
     new_fullname = f"{folder_fullname}/{safe_name}".replace("//", "/")
     return new_fullname
 
+
+def extract_video_frame(video_path: str, frame_type: str = "first") -> str:
+    """
+    Extract first or last frame from a video file.
+    Returns the output filename (e.g. /output/sub/video_first_frame.png).
+    Requires ffmpeg in PATH.
+    
+    Args:
+        video_path: Virtual path to video (e.g., /output/folder/video.mp4)
+        frame_type: "first" or "last"
+    """
+    real_path = utils.get_real_output_filepath(video_path)
+    
+    if not os.path.isfile(real_path):
+        raise RuntimeError(f"File not found: {video_path}")
+    
+    if not assert_file_type(real_path, ["video"]):
+        raise RuntimeError(f"Not a video file: {video_path}")
+    
+    # Get video info to find last frame
+    out_dir = os.path.dirname(real_path)
+    base_name = os.path.splitext(os.path.basename(real_path))[0]
+    suffix = "first_frame" if frame_type == "first" else "last_frame"
+    output_name = f"{base_name}_{suffix}.png"
+    output_path = os.path.join(out_dir, output_name)
+    
+    # Handle name conflicts
+    counter = 1
+    while os.path.exists(output_path):
+        output_name = f"{base_name}_{suffix}_{counter}.png"
+        output_path = os.path.join(out_dir, output_name)
+        counter += 1
+    
+    if frame_type == "first":
+        # Extract first frame
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-y",
+            "-i", real_path,
+            "-vframes", "1",
+            "-q:v", "1",
+            output_path
+        ]
+    else:
+        # Extract last frame - need to get video duration first
+        probe_cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-count_packets",
+            "-show_entries", "stream=nb_read_packets",
+            "-of", "csv=p=0",
+            real_path
+        ]
+        
+        try:
+            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and result.stdout.strip():
+                # Use sseof to seek from end
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-y",
+                    "-sseof", "-0.1",  # Seek to 0.1 seconds before end
+                    "-i", real_path,
+                    "-update", "1",
+                    "-q:v", "1",
+                    output_path
+                ]
+            else:
+                # Fallback: seek to a very late timestamp
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel", "error", 
+                    "-y",
+                    "-sseof", "-0.1",
+                    "-i", real_path,
+                    "-update", "1",
+                    "-q:v", "1",
+                    output_path
+                ]
+        except Exception:
+            # Fallback
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y", 
+                "-sseof", "-0.1",
+                "-i", real_path,
+                "-update", "1",
+                "-q:v", "1",
+                output_path
+            ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    
+    if result.returncode != 0 or not os.path.exists(output_path):
+        raise RuntimeError(f"ffmpeg extract failed: {result.stderr.strip() or 'unknown error'}")
+    
+    # Invalidate directory cache
+    cache_helper.rm_cache(out_dir)
+    
+    # Build virtual path for UI
+    folder_fullname = os.path.dirname(video_path.rstrip("/"))
+    if folder_fullname == "":
+        folder_fullname = "/output"
+    new_fullname = f"{folder_fullname}/{output_name}".replace("//", "/")
+    return new_fullname
+
 def get_cache_key(filename: str, max_size: int) -> str:
     """Generate cache key based on filename, mtime, and size"""
     try:

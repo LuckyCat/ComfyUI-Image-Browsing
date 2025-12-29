@@ -1,18 +1,24 @@
 <template>
   <div ref="containerRef" class="lazy-image h-full w-full">
-    <!-- Placeholder shown while loading -->
+    <!-- Placeholder shown while loading (only if not already cached) -->
     <div 
-      v-if="!isLoaded && !hasError" 
+      v-if="!isLoaded && !hasError && !isCached" 
       class="h-full w-full flex items-center justify-center bg-gray-800/30"
     >
       <i v-if="isVisible" class="pi pi-spin pi-spinner text-gray-500 text-sm"></i>
     </div>
     
-    <!-- Image -->
+    <!-- Image with smooth transition -->
     <img
       ref="imgRef"
-      :class="['h-full w-full object-contain', isLoaded ? 'opacity-100' : 'opacity-0 absolute']"
+      :class="[
+        'h-full w-full object-contain',
+        // Skip transition if already cached for instant display
+        isCached ? '' : 'transition-opacity duration-150',
+        (isLoaded || isCached) ? 'opacity-100' : 'opacity-0 absolute'
+      ]"
       :alt="alt"
+      decoding="async"
       @load="onLoad"
       @error="onError"
     />
@@ -25,7 +31,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+
+// Global cache to track loaded images - survives component unmount/remount
+const loadedImagesCache = new Set<string>()
+
+// Limit cache size to prevent memory issues
+const MAX_CACHE_SIZE = 500
+
+const addToCache = (src: string) => {
+  if (loadedImagesCache.size >= MAX_CACHE_SIZE) {
+    // Remove oldest entries (first 100)
+    const entries = Array.from(loadedImagesCache)
+    entries.slice(0, 100).forEach(e => loadedImagesCache.delete(e))
+  }
+  loadedImagesCache.add(src)
+}
 
 const props = defineProps<{
   src: string
@@ -39,18 +60,35 @@ const isLoaded = ref(false)
 const hasError = ref(false)
 const currentSrc = ref('')
 
+// Check if this image was already loaded before (cached in browser)
+const isCached = computed(() => loadedImagesCache.has(props.src))
+
 let observer: IntersectionObserver | null = null
 
 const loadImage = () => {
-  if (imgRef.value && props.src && props.src !== currentSrc.value) {
-    currentSrc.value = props.src
+  if (!imgRef.value || !props.src) return
+  
+  // If already loaded or same src, skip
+  if (props.src === currentSrc.value && isLoaded.value) return
+  
+  currentSrc.value = props.src
+  
+  // If image is in our cache, it's already in browser cache too - load immediately
+  if (isCached.value) {
     imgRef.value.src = props.src
+    // Image should load from browser cache almost instantly
+    return
   }
+  
+  // For new images, set src directly
+  imgRef.value.src = props.src
 }
 
 const onLoad = () => {
   isLoaded.value = true
   hasError.value = false
+  // Add to global cache so remounted components know it's loaded
+  addToCache(props.src)
 }
 
 const onError = () => {
@@ -59,12 +97,23 @@ const onError = () => {
 }
 
 onMounted(() => {
+  // If image is already cached, load immediately without waiting for intersection
+  if (isCached.value) {
+    isVisible.value = true
+    isLoaded.value = true // Assume it will load from browser cache
+    if (imgRef.value) {
+      imgRef.value.src = props.src
+      currentSrc.value = props.src
+    }
+    return
+  }
+  
   observer = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
           isVisible.value = true
-          nextTick(loadImage)
+          loadImage()
           // Stop observing after becoming visible
           if (observer && containerRef.value) {
             observer.unobserve(containerRef.value)
@@ -73,7 +122,8 @@ onMounted(() => {
       })
     },
     {
-      rootMargin: '100px',
+      // Larger margin for earlier preloading
+      rootMargin: '300px',
       threshold: 0,
     }
   )
@@ -91,11 +141,21 @@ onUnmounted(() => {
 
 // Handle src changes
 watch(() => props.src, (newSrc, oldSrc) => {
-  if (newSrc !== oldSrc && newSrc !== currentSrc.value) {
-    isLoaded.value = false
-    hasError.value = false
-    if (isVisible.value) {
-      nextTick(loadImage)
+  if (newSrc !== oldSrc) {
+    // Check if new image is already in cache
+    if (loadedImagesCache.has(newSrc)) {
+      isLoaded.value = true
+      hasError.value = false
+      if (imgRef.value) {
+        imgRef.value.src = newSrc
+        currentSrc.value = newSrc
+      }
+    } else {
+      isLoaded.value = false
+      hasError.value = false
+      if (isVisible.value) {
+        loadImage()
+      }
     }
   }
 })
@@ -105,5 +165,12 @@ watch(() => props.src, (newSrc, oldSrc) => {
 .lazy-image {
   position: relative;
   overflow: hidden;
+  /* Contain layout to prevent reflows */
+  contain: layout style;
+}
+
+.lazy-image img {
+  /* Prevent layout shifts */
+  backface-visibility: hidden;
 }
 </style>

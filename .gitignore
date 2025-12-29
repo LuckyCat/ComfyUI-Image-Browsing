@@ -197,3 +197,5 @@ tmp/
 # config
 config/
 tsconfig.tsbuildinfo
+
+thumbnail_cache/
