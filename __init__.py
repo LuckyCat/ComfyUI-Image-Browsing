@@ -1,6 +1,7 @@
 import os
 import folder_paths
 import asyncio
+import hashlib
 from .py import config
 
 
@@ -28,6 +29,21 @@ from .py import services
 
 
 routes = config.routes
+
+
+def get_folder_etag(directory: str) -> str:
+    """Generate ETag based on folder mtime"""
+    try:
+        mtime = os.path.getmtime(directory)
+        return f'"{hashlib.md5(f"{directory}:{mtime}".encode()).hexdigest()}"'
+    except OSError:
+        return '""'
+
+
+def check_etag_match(request, etag: str) -> bool:
+    """Check if client's If-None-Match header matches our ETag"""
+    if_none_match = request.headers.get('If-None-Match', '')
+    return if_none_match == etag
 
 
 # ============================================================================
@@ -85,8 +101,16 @@ async def scan_output_folder(request):
                 )
 
         elif os.path.isdir(filepath):
+            # Check ETag for conditional request (304 Not Modified)
+            etag = get_folder_etag(filepath)
+            if check_etag_match(request, etag):
+                return web.Response(status=304)
+            
             items = await asyncio.to_thread(services.scan_directory_items, filepath)
-            return web.json_response({"success": True, "data": items})
+            return web.json_response(
+                {"success": True, "data": items},
+                headers={"ETag": etag, "Cache-Control": "private, no-cache"}
+            )
 
         return web.Response(status=404)
     except Exception as e:
@@ -110,8 +134,16 @@ async def scan_workflows_folder(request):
             return web.FileResponse(filepath)
 
         elif os.path.isdir(filepath):
+            # Check ETag for conditional request (304 Not Modified)
+            etag = get_folder_etag(filepath)
+            if check_etag_match(request, etag):
+                return web.Response(status=304)
+            
             items = await asyncio.to_thread(services.scan_workflows_directory, filepath)
-            return web.json_response({"success": True, "data": items})
+            return web.json_response(
+                {"success": True, "data": items},
+                headers={"ETag": etag, "Cache-Control": "private, no-cache"}
+            )
 
         return web.Response(status=404)
     except Exception as e:
@@ -185,8 +217,16 @@ async def scan_prompts_folder(request):
             return web.FileResponse(filepath)
 
         elif os.path.isdir(filepath):
+            # Check ETag for conditional request (304 Not Modified)
+            etag = get_folder_etag(filepath)
+            if check_etag_match(request, etag):
+                return web.Response(status=304)
+            
             items = await asyncio.to_thread(services.scan_prompts_directory, filepath)
-            return web.json_response({"success": True, "data": items})
+            return web.json_response(
+                {"success": True, "data": items},
+                headers={"ETag": etag, "Cache-Control": "private, no-cache"}
+            )
 
         return web.Response(status=404)
     except Exception as e:

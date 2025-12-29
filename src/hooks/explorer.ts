@@ -1,4 +1,4 @@
-import { request } from 'hooks/request'
+import { request, invalidateCache, invalidateCachePrefix, prefetchFolders, getCachedData, revalidateInBackground } from 'hooks/request'
 import { defineStore } from 'hooks/store'
 import { useToast } from 'hooks/toast'
 import { MenuItem } from 'primevue/menuitem'
@@ -125,7 +125,9 @@ export const useExplorer = defineStore('explorer', (store) => {
       method: 'POST',
       body: formData,
     })
-      .then(() => refresh())
+      .then(() => {
+        return forceRefresh()
+      })
       .catch((err) => {
         toast.add({
           severity: 'error',
@@ -155,7 +157,13 @@ export const useExplorer = defineStore('explorer', (store) => {
             detail: 'Deleted successfully.',
             life: 2000,
           })
-          return refresh()
+          // Invalidate cache for deleted folders
+          selectedItems.value.forEach(item => {
+            if (item.type === 'folder') {
+              invalidateCachePrefix(item.fullname)
+            }
+          })
+          return forceRefresh()
         })
         .catch((err) => {
           toast.add({
@@ -246,7 +254,7 @@ export const useExplorer = defineStore('explorer', (store) => {
               detail: 'Merged video created.',
               life: 3000,
             })
-            return refresh()
+            return forceRefresh()
           })
           .catch((err) => {
             toast.add({
@@ -736,39 +744,102 @@ export const useExplorer = defineStore('explorer', (store) => {
     menuRef.value.show($event)
   }
 
+  /**
+   * Process response data and update UI
+   */
+  const processData = (resData: any[]) => {
+    const folders: DirectoryItem[] = []
+    const files: DirectoryItem[] = []
+    for (const item of resData) {
+      item.fullname = `${currentPath.value}/${item.name}`
+      if (item.type === 'folder') {
+        folders.push(item)
+      } else {
+        files.push(item)
+      }
+    }
+    folders.sort((a, b) => a.name.localeCompare(b.name))
+    files.sort((a, b) => a.name.localeCompare(b.name))
+    items.value = [...folders, ...files]
+    items.value.forEach(bindEvents)
+    breadcrumb.value[breadcrumb.value.length - 1].children = folders.map(
+      (item) => {
+        const folderLevel = breadcrumb.value.length
+        return {
+          label: item.name,
+          value: item.fullname,
+          command: () => {
+            entryFolder(item, folderLevel)
+          },
+        }
+      },
+    )
+    
+    // Prefetch subfolders in background for instant navigation
+    if (folders.length > 0 && folders.length <= 20) {
+      const folderPaths = folders.map(f => f.fullname)
+      prefetchFolders(folderPaths)
+    }
+  }
+
+  /**
+   * Refresh with cache-first strategy:
+   * 1. If cached: show instantly, revalidate in background
+   * 2. If not cached: show loading, fetch from server
+   */
   const refresh = async () => {
+    selectedItems.value = []
+    currentSelected.value = undefined
+    
+    // Try to get from cache first (instant)
+    const cachedData = getCachedData<any[]>(currentPath.value)
+    
+    if (cachedData) {
+      // INSTANT: Show cached data immediately
+      processData(cachedData)
+      loading.value = false
+      
+      // Revalidate in background (stale-while-revalidate)
+      revalidateInBackground(currentPath.value)
+      return
+    }
+    
+    // Not cached - need to fetch from network
+    loading.value = true
+    items.value = []
+    
+    return request(currentPath.value)
+      .then((resData) => {
+        processData(resData)
+      })
+      .catch((err) => {
+        toast.add({
+          severity: 'error',
+          summary: 'Error',
+          detail: err.message || 'Failed to load folder list.',
+          life: 15000,
+        })
+      })
+      .finally(() => {
+        loading.value = false
+      })
+  }
+
+  /**
+   * Force refresh - always fetch from network (after mutations)
+   */
+  const forceRefresh = async () => {
     loading.value = true
     items.value = []
     selectedItems.value = []
     currentSelected.value = undefined
+    
+    // Invalidate cache first
+    invalidateCache(currentPath.value)
+    
     return request(currentPath.value)
       .then((resData) => {
-        const folders: DirectoryItem[] = []
-        const images: DirectoryItem[] = []
-        for (const item of resData) {
-          item.fullname = `${currentPath.value}/${item.name}`
-          if (item.type === 'folder') {
-            folders.push(item)
-          } else {
-            images.push(item)
-          }
-        }
-        folders.sort((a, b) => a.name.localeCompare(b.name))
-        images.sort((a, b) => a.name.localeCompare(b.name))
-        items.value = [...folders, ...images]
-        items.value.forEach(bindEvents)
-        breadcrumb.value[breadcrumb.value.length - 1].children = folders.map(
-          (item) => {
-            const folderLevel = breadcrumb.value.length
-            return {
-              label: item.name,
-              value: item.fullname,
-              command: () => {
-                entryFolder(item, folderLevel)
-              },
-            }
-          },
-        )
+        processData(resData)
       })
       .catch((err) => {
         toast.add({
@@ -831,6 +902,7 @@ export const useExplorer = defineStore('explorer', (store) => {
     confirmName: confirmName,
     currentRootType: currentRootType,
     refresh: refresh,
+    forceRefresh: forceRefresh,
     deleteItems: deleteItems,
     renameItem: renameItem,
     entryFolder: entryFolder,

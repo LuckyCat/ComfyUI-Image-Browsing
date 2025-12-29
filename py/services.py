@@ -363,7 +363,18 @@ def scan_directory_items(directory: str):
 
 
 def scan_workflows_directory(directory: str):
-    """Scan directory for workflow files (.json) and folders"""
+    """Scan directory for workflow files (.json) and folders with caching"""
+    # Check cache first
+    result, m_time = cache_helper.get_cache(directory)
+    
+    try:
+        folder_m_time = os.path.getmtime(directory)
+    except OSError:
+        return []
+
+    if folder_m_time == m_time:
+        return result
+
     result = []
     
     try:
@@ -395,11 +406,23 @@ def scan_workflows_directory(directory: str):
     except OSError:
         return []
     
+    cache_helper.set_cache(directory, (result, folder_m_time))
     return result
 
 
 def scan_prompts_directory(directory: str):
-    """Scan directory for prompt files (.txt) and folders"""
+    """Scan directory for prompt files (.txt) and folders with caching"""
+    # Check cache first
+    result, m_time = cache_helper.get_cache(directory)
+    
+    try:
+        folder_m_time = os.path.getmtime(directory)
+    except OSError:
+        return []
+
+    if folder_m_time == m_time:
+        return result
+
     result = []
     
     try:
@@ -431,6 +454,7 @@ def scan_prompts_directory(directory: str):
     except OSError:
         return []
     
+    cache_helper.set_cache(directory, (result, folder_m_time))
     return result
 
 

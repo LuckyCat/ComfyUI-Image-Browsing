@@ -393,6 +393,7 @@ const {
   confirmName,
   currentRootType,
   refresh,
+  forceRefresh,
   entryFolder,
   folderContext,
   goBackParentFolder,
@@ -488,7 +489,7 @@ const onTreeSelect = async (path: string) => {
 }
 
 const onRefresh = async () => {
-  await refresh()
+  await forceRefresh()
   await folderTreeRef.value?.refreshTree()
 }
 
