@@ -17,31 +17,37 @@
         <span class="text-sm font-medium truncate">{{ filename }}</span>
         <span v-if="isDirty" class="text-yellow-400 text-xs">●</span>
       </div>
-      <div class="flex items-center gap-1">
+      
+      <!-- Center buttons: Save & Copy -->
+      <div class="action-buttons flex items-center gap-1">
         <button 
-          class="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
+          :class="['action-btn', { active: false, disabled: !isDirty }]"
+          @click="save"
+          :disabled="!isDirty"
+          title="Save (Ctrl+S)"
+        >
+          Save
+        </button>
+        <button 
+          class="action-btn"
           @click="copyToClipboard"
           title="Copy to clipboard"
         >
-          <i class="pi pi-copy text-sm"></i>
+          Copy
         </button>
+      </div>
+      
+      <!-- Window controls -->
+      <div class="flex items-center gap-1">
         <button 
-          class="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
-          @click="save"
-          :disabled="!isDirty"
-          title="Save"
-        >
-          <i class="pi pi-save text-sm"></i>
-        </button>
-        <button 
-          class="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
+          class="p-2 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
           @click="toggleMaximize"
           :title="isMaximized ? 'Restore' : 'Maximize'"
         >
-          <i :class="['pi text-sm', isMaximized ? 'pi-window-minimize' : 'pi-window-maximize']"></i>
+          <i :class="['pi text-sm', isMaximized ? 'pi-arrow-down-left-and-arrow-up-right-to-center' : 'pi-arrow-up-right-and-arrow-down-left-from-center']"></i>
         </button>
         <button 
-          class="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
+          class="p-2 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
           @click="$emit('close')"
           title="Close"
         >
@@ -265,6 +271,9 @@ let dragOffset = { x: 0, y: 0 }
 
 const startDrag = (e: MouseEvent) => {
   if (isMaximized.value) return
+  // Don't drag if clicking on buttons
+  if ((e.target as HTMLElement).closest('.action-buttons, button')) return
+  
   isDragging = true
   dragOffset = {
     x: e.clientX - position.value.x,
@@ -385,6 +394,40 @@ watch(() => props.filepath, loadContent)
 
 .resize-handle:hover {
   background: rgba(59, 130, 246, 0.3);
+}
+
+/* Action buttons styled like SizeSelector */
+.action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.action-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--p-text-muted-color, #888);
+}
+
+.action-btn:hover:not(.disabled) {
+  color: var(--p-text-color, #fff);
+  background: var(--p-surface-100, rgba(255, 255, 255, 0.1));
+}
+
+.action-btn.active {
+  color: var(--p-text-color, #fff);
+  background: var(--p-primary-color, #3b82f6);
+  border-color: var(--p-primary-color, #3b82f6);
+}
+
+.action-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Syntax highlighting colors */
