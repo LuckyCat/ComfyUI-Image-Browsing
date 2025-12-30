@@ -21,6 +21,7 @@
   "thumbnailSize": "Thumbnail Size",
   "extractFirstFrame": "Extract First Frame",
   "extractLastFrame": "Extract Last Frame",
+  "refreshThumbnail": "Refresh Thumbnail",
   "duplicate": "Duplicate",
   "name": "Name",
   "dateModified": "Date Modified",

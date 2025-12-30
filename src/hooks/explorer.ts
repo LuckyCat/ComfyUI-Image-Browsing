@@ -151,6 +151,17 @@ export const useExplorer = defineStore('explorer', (store) => {
   }
 
   const deleteItems = () => {
+    // Check if there are items to delete
+    if (selectedItems.value.length === 0) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Warning',
+        detail: 'No items selected to delete.',
+        life: 2000,
+      })
+      return
+    }
+    
     const handleDelete = () => {
       // Optimistic update - remove from UI immediately
       const deletedNames = selectedItems.value.map(item => item.name)
@@ -412,6 +423,103 @@ export const useExplorer = defineStore('explorer', (store) => {
     }
   }
 
+  const reverseVideo = async (item: DirectoryItem) => {
+    loading.value = true
+    try {
+      const result = await request('/reverse-video', {
+        method: 'POST',
+        body: JSON.stringify({
+          video_path: item.fullname,
+        }),
+      })
+      
+      toast.add({
+        severity: 'success',
+        summary: 'Success',
+        detail: `Reversed video created: ${result.output}`,
+        life: 3000,
+      })
+      
+      await forceRefresh()
+    } catch (err: any) {
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || 'Failed to reverse video.',
+        life: 5000,
+      })
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const refreshThumbnail = async (item: DirectoryItem) => {
+    loading.value = true
+    try {
+      await request('/refresh-thumbnail', {
+        method: 'POST',
+        body: JSON.stringify({
+          file_path: item.fullname,
+        }),
+      })
+      
+      toast.add({
+        severity: 'success',
+        summary: 'Success',
+        detail: 'Thumbnail regenerated',
+        life: 2000,
+      })
+      
+      // Force reload the thumbnail by adding a cache-busting param
+      // This will be handled by the LazyImage component
+      await forceRefresh()
+    } catch (err: any) {
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || 'Failed to refresh thumbnail',
+        life: 5000,
+      })
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const copyLoadNode = async (item: DirectoryItem, type: 'image' | 'video') => {
+    loading.value = true
+    try {
+      const result = await request('/copy-to-input', {
+        method: 'POST',
+        body: JSON.stringify({
+          file_path: item.fullname,
+          type: type,
+        }),
+      })
+      
+      // Create ComfyUI node data for clipboard
+      const nodeData = result.nodeData
+      
+      // Copy to clipboard
+      await navigator.clipboard.writeText(JSON.stringify(nodeData))
+      
+      toast.add({
+        severity: 'success',
+        summary: 'Success',
+        detail: `${type === 'image' ? 'LoadImage' : 'LoadVideo'} node copied to clipboard. File copied to input folder.`,
+        life: 3000,
+      })
+    } catch (err: any) {
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || 'Failed to copy node',
+        life: 5000,
+      })
+    } finally {
+      loading.value = false
+    }
+  }
+
   const renameItem = (item: DirectoryItem) => {
     confirmName.value = item.name
 
@@ -572,9 +680,32 @@ export const useExplorer = defineStore('explorer', (store) => {
             },
           },
         )
+        
+        // Copy LoadImage/LoadVideo to clipboard (for ComfyUI workflow)
+        if (item.type === 'image') {
+          contextMenu.push({
+            label: 'Copy LoadImage',
+            icon: 'pi pi-copy',
+            command: () => copyLoadNode(item, 'image'),
+          })
+        }
+        if (item.type === 'video') {
+          contextMenu.push({
+            label: 'Copy LoadVideo',
+            icon: 'pi pi-copy',
+            command: () => copyLoadNode(item, 'video'),
+          })
+        }
+        
+        // Refresh thumbnail
+        contextMenu.push({
+          label: t('refreshThumbnail'),
+          icon: 'pi pi-refresh',
+          command: () => refreshThumbnail(item),
+        })
       }
 
-      // Video-specific options: Extract First/Last Frame
+      // Video-specific options: Extract First/Last Frame, Reverse
       if (item.type === 'video') {
         contextMenu.push(
           {
@@ -586,6 +717,11 @@ export const useExplorer = defineStore('explorer', (store) => {
             label: t('extractLastFrame'),
             icon: 'pi pi-step-forward',
             command: () => extractVideoFrame(item, 'last'),
+          },
+          {
+            label: 'Reverse Video',
+            icon: 'pi pi-replay',
+            command: () => reverseVideo(item),
           },
         )
       }

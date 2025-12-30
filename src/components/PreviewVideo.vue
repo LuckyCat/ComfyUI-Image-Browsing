@@ -144,6 +144,20 @@
         :loading="extractingLast"
         v-tooltip.top="'Extract Last Frame'"
       />
+      
+      <div class="w-px h-4 bg-gray-600 mx-1"></div>
+      
+      <!-- Split video -->
+      <Button
+        icon="pi pi-arrows-h"
+        severity="secondary"
+        :text="true"
+        :rounded="true"
+        size="small"
+        @click="splitVideo"
+        :loading="splittingVideo"
+        v-tooltip.top="'Split Video at Current Frame'"
+      />
     </div>
   </div>
 </template>
@@ -402,6 +416,51 @@ const extractLastFrame = async () => {
     })
   } finally {
     extractingLast.value = false
+  }
+}
+
+// Split video
+const splittingVideo = ref(false)
+
+const splitVideo = async () => {
+  if (!videoRef.value) return
+  
+  const currentTime = videoRef.value.currentTime
+  if (currentTime <= 0) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Warning',
+      detail: 'Cannot split at the beginning of video',
+      life: 3000,
+    })
+    return
+  }
+  
+  splittingVideo.value = true
+  try {
+    const result = await request('/split-video', {
+      method: 'POST',
+      body: JSON.stringify({
+        video_path: props.item.fullname,
+        timestamp: currentTime,
+      }),
+    })
+    
+    toast.add({
+      severity: 'success',
+      summary: 'Success',
+      detail: `Video split into ${result.part1} and ${result.part2}. Frame extracted: ${result.frame}`,
+      life: 4000,
+    })
+  } catch (err: any) {
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: err.message || 'Failed to split video',
+      life: 3000,
+    })
+  } finally {
+    splittingVideo.value = false
   }
 }
 </script>

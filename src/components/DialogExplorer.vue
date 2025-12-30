@@ -150,10 +150,10 @@
               >
                 <div
                   :class="[
-                    'flex h-full w-full flex-col items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-lg',
-                    'hover:bg-gray-300 dark:hover:bg-gray-800',
+                    'flex h-full w-full flex-col items-center justify-center gap-1 overflow-hidden rounded-lg',
+                    'hover:bg-gray-300 dark:hover:bg-gray-700',
                     selectedItemsName.includes(rowItem.name)
-                      ? 'bg-gray-300 dark:bg-gray-800'
+                      ? 'bg-blue-200 dark:bg-blue-900/60 ring-2 ring-blue-400 dark:ring-blue-500'
                       : '',
                   ]"
                   @click.stop="rowItem.onClick"
@@ -285,7 +285,7 @@
                     ></div>
                   </div>
                   <div class="flex w-full justify-center overflow-hidden px-1">
-                    <span class="overflow-hidden text-ellipsis text-xs">
+                    <span class="filename-text text-xs text-center" :title="rowItem.name">
                       {{ rowItem.name }}
                     </span>
                   </div>
@@ -394,6 +394,7 @@ const {
   currentRootType,
   refresh,
   forceRefresh,
+  deleteItems,
   entryFolder,
   folderContext,
   goBackParentFolder,
@@ -572,10 +573,40 @@ const onMoveFiles = async (files: string[], targetFolder: string) => {
     })
   }
 }
+
+// Keyboard shortcuts
+const onKeyDown = (e: KeyboardEvent) => {
+  // Delete key - delete selected items
+  if (e.key === 'Delete' && selectedItems.value.length > 0) {
+    e.preventDefault()
+    deleteItems()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', onKeyDown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeyDown)
+})
 </script>
 
 <style scoped>
 .folder-sidebar {
   transition: width 0.2s ease;
+}
+
+/* Multi-line file names - override parent's whitespace-nowrap */
+.filename-text {
+  white-space: normal !important;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-all;
+  line-height: 1.3;
+  min-height: 2.6em;
 }
 </style>

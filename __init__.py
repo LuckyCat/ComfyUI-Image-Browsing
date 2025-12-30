@@ -626,6 +626,80 @@ async def extract_video_frame(request):
         return web.json_response({"success": False, "error": error_msg})
 
 
+@routes.post("/image-browsing/refresh-thumbnail")
+async def refresh_thumbnail(request):
+    """Regenerate thumbnail for a file"""
+    try:
+        data = await request.json()
+        file_path = data.get("file_path", None)
+        
+        if not file_path:
+            return web.json_response({"success": False, "error": "Missing file_path"}, status=400)
+        
+        await asyncio.to_thread(services.regenerate_thumbnail, file_path)
+        return web.json_response({"success": True})
+    except Exception as e:
+        error_msg = f"Refresh thumbnail failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/copy-to-input")
+async def copy_to_input(request):
+    """Copy file to input folder and return LoadImage/LoadVideo node data"""
+    try:
+        data = await request.json()
+        file_path = data.get("file_path", None)
+        node_type = data.get("type", "image")  # "image" or "video"
+        
+        if not file_path:
+            return web.json_response({"success": False, "error": "Missing file_path"}, status=400)
+        
+        result = await asyncio.to_thread(services.copy_to_input_and_get_node, file_path, node_type)
+        return web.json_response({"success": True, "data": result})
+    except Exception as e:
+        error_msg = f"Copy to input failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/split-video")
+async def split_video(request):
+    """Split video at specified timestamp"""
+    try:
+        data = await request.json()
+        video_path = data.get("video_path", None)
+        timestamp = data.get("timestamp", 0)
+        
+        if not video_path:
+            return web.json_response({"success": False, "error": "Missing video_path"}, status=400)
+        
+        result = await asyncio.to_thread(services.split_video_at_timestamp, video_path, timestamp)
+        return web.json_response({"success": True, "data": result})
+    except Exception as e:
+        error_msg = f"Split video failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/reverse-video")
+async def reverse_video(request):
+    """Create a reversed copy of a video"""
+    try:
+        data = await request.json()
+        video_path = data.get("video_path", None)
+        
+        if not video_path:
+            return web.json_response({"success": False, "error": "Missing video_path"}, status=400)
+        
+        result = await asyncio.to_thread(services.reverse_video, video_path)
+        return web.json_response({"success": True, "data": result})
+    except Exception as e:
+        error_msg = f"Reverse video failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
 WEB_DIRECTORY = "web"
 NODE_CLASS_MAPPINGS = {}
 __all__ = ["NODE_CLASS_MAPPINGS"]

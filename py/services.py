@@ -1539,3 +1539,234 @@ def cache_all_images(max_size: int = 128, num_workers: int = 1, priority_folder:
             _cache_status["is_paused"] = False
     
     return {"success": True, "total": total_files, "skipped": skipped, "errors": errors}
+
+
+def regenerate_thumbnail(file_path: str):
+    """
+    Regenerate thumbnail for a file by removing it from cache
+    """
+    real_path = utils.get_real_output_filepath(file_path)
+    
+    if not os.path.exists(real_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+    
+    # Get cache keys for different sizes and remove them
+    for max_size in [128, 256, 512]:
+        cache_key = get_cache_key(real_path, max_size)
+        cache_path = cache_helper.image_cache._get_cache_path(cache_key)
+        if os.path.exists(cache_path):
+            try:
+                os.remove(cache_path)
+            except OSError:
+                pass
+    
+    return True
+
+
+def copy_to_input_and_get_node(file_path: str, node_type: str):
+    """
+    Copy file to ComfyUI input folder and return node data for clipboard
+    """
+    real_path = utils.get_real_output_filepath(file_path)
+    
+    if not os.path.exists(real_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+    
+    # Get input directory
+    import folder_paths
+    input_dir = folder_paths.get_input_directory()
+    
+    # Copy file to input
+    filename = os.path.basename(real_path)
+    dest_path = os.path.join(input_dir, filename)
+    
+    # Handle name conflicts
+    if os.path.exists(dest_path):
+        base, ext = os.path.splitext(filename)
+        counter = 1
+        while os.path.exists(dest_path):
+            filename = f"{base}({counter}){ext}"
+            dest_path = os.path.join(input_dir, filename)
+            counter += 1
+    
+    shutil.copy2(real_path, dest_path)
+    
+    # Create node data for clipboard
+    if node_type == "image":
+        node_data = {
+            "nodes": [{
+                "id": 1,
+                "type": "LoadImage",
+                "pos": [0, 0],
+                "size": [315, 314],
+                "flags": {},
+                "order": 0,
+                "mode": 0,
+                "outputs": [
+                    {"name": "IMAGE", "type": "IMAGE", "links": [], "slot_index": 0},
+                    {"name": "MASK", "type": "MASK", "links": [], "slot_index": 1}
+                ],
+                "properties": {"Node name for S&R": "LoadImage"},
+                "widgets_values": [filename, "image"]
+            }],
+            "links": [],
+            "groups": [],
+            "config": {},
+            "extra": {},
+            "version": 0.4
+        }
+    else:  # video
+        node_data = {
+            "nodes": [{
+                "id": 1,
+                "type": "LoadVideo",
+                "pos": [0, 0],
+                "size": [240, 130],
+                "flags": {},
+                "order": 0,
+                "mode": 0,
+                "outputs": [
+                    {"name": "IMAGES", "type": "IMAGE", "links": [], "slot_index": 0},
+                    {"name": "AUDIO", "type": "AUDIO", "links": [], "slot_index": 1},
+                    {"name": "VIDEO_INFO", "type": "VIDEO_INFO", "links": [], "slot_index": 2}
+                ],
+                "properties": {"Node name for S&R": "LoadVideo"},
+                "widgets_values": [filename, 0, False, 0, 0, "nearest-exact"]
+            }],
+            "links": [],
+            "groups": [],
+            "config": {},
+            "extra": {},
+            "version": 0.4
+        }
+    
+    return {"filename": filename, "nodeData": node_data}
+
+
+def split_video_at_timestamp(video_path: str, timestamp: float):
+    """
+    Split video into two parts at the specified timestamp and extract the frame at that point
+    """
+    real_path = utils.get_real_output_filepath(video_path)
+    
+    if not os.path.exists(real_path):
+        raise FileNotFoundError(f"Video not found: {video_path}")
+    
+    # Get output directory (same as source file)
+    output_dir = os.path.dirname(real_path)
+    base_name = os.path.splitext(os.path.basename(real_path))[0]
+    ext = os.path.splitext(real_path)[1]
+    
+    # Generate output filenames
+    timestamp_str = f"{int(timestamp * 1000)}ms"
+    part1_name = f"{base_name}_part1_{timestamp_str}{ext}"
+    part2_name = f"{base_name}_part2_{timestamp_str}{ext}"
+    frame_name = f"{base_name}_frame_{timestamp_str}.png"
+    
+    part1_path = os.path.join(output_dir, part1_name)
+    part2_path = os.path.join(output_dir, part2_name)
+    frame_path = os.path.join(output_dir, frame_name)
+    
+    # Handle name conflicts
+    def get_unique_path(path):
+        if not os.path.exists(path):
+            return path
+        base, ext_tmp = os.path.splitext(path)
+        counter = 1
+        while os.path.exists(f"{base}({counter}){ext_tmp}"):
+            counter += 1
+        return f"{base}({counter}){ext_tmp}"
+    
+    part1_path = get_unique_path(part1_path)
+    part2_path = get_unique_path(part2_path)
+    frame_path = get_unique_path(frame_path)
+    
+    # Update names after conflict resolution
+    part1_name = os.path.basename(part1_path)
+    part2_name = os.path.basename(part2_path)
+    frame_name = os.path.basename(frame_path)
+    
+    try:
+        # Part 1: from start to timestamp (stream copy is fine for part1)
+        subprocess.run([
+            'ffmpeg', '-y', '-i', real_path,
+            '-t', str(timestamp),
+            '-c', 'copy',
+            '-avoid_negative_ts', 'make_zero',
+            part1_path
+        ], check=True, capture_output=True)
+        
+        # Part 2: from timestamp to end
+        # Use -ss after -i for frame-accurate seek, re-encode to fix timestamps
+        subprocess.run([
+            'ffmpeg', '-y',
+            '-i', real_path,
+            '-ss', str(timestamp),
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-video_track_timescale', '90000',
+            '-fflags', '+genpts',
+            part2_path
+        ], check=True, capture_output=True)
+        
+        # Extract frame at timestamp
+        subprocess.run([
+            'ffmpeg', '-y',
+            '-ss', str(timestamp),
+            '-i', real_path,
+            '-vframes', '1',
+            '-q:v', '2',
+            frame_path
+        ], check=True, capture_output=True)
+        
+        return {
+            "part1": part1_name,
+            "part2": part2_name,
+            "frame": frame_name
+        }
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}")
+
+
+def reverse_video(video_path: str):
+    """
+    Create a reversed copy of the video
+    """
+    real_path = utils.get_real_output_filepath(video_path)
+    
+    if not os.path.exists(real_path):
+        raise FileNotFoundError(f"Video not found: {video_path}")
+    
+    # Get output directory (same as source file)
+    output_dir = os.path.dirname(real_path)
+    base_name = os.path.splitext(os.path.basename(real_path))[0]
+    ext = os.path.splitext(real_path)[1]
+    
+    # Generate output filename
+    output_name = f"{base_name}_reversed{ext}"
+    output_path = os.path.join(output_dir, output_name)
+    
+    # Handle name conflicts
+    if os.path.exists(output_path):
+        base, ext_tmp = os.path.splitext(output_path)
+        counter = 1
+        while os.path.exists(f"{base}({counter}){ext_tmp}"):
+            counter += 1
+        output_path = f"{base}({counter}){ext_tmp}"
+        output_name = os.path.basename(output_path)
+    
+    try:
+        # Reverse video and audio
+        subprocess.run([
+            'ffmpeg', '-y',
+            '-i', real_path,
+            '-vf', 'reverse',
+            '-af', 'areverse',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-c:a', 'aac', '-b:a', '192k',
+            output_path
+        ], check=True, capture_output=True)
+        
+        return {"output": output_name}
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}")

@@ -21,6 +21,7 @@
   "thumbnailSize": "缩略图大小",
   "extractFirstFrame": "提取首帧",
   "extractLastFrame": "提取尾帧",
+  "refreshThumbnail": "刷新缩略图",
   "duplicate": "复制",
   "name": "名称",
   "dateModified": "修改日期",

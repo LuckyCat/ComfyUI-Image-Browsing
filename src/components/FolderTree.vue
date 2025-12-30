@@ -232,6 +232,10 @@ const loadChildren = async (node: TreeNode) => {
     node.children = folders
     node.loaded = true
     
+    // Save hasSubfolders info for this folder
+    cachedHasSubfolders.value[node.fullname] = folders.length > 0
+    saveCachedSubfolders(cachedHasSubfolders.value)
+    
     if (folders.length > 0) {
       fetchFolderCounts(node.fullname)
     }
