@@ -1,4 +1,13 @@
-import { request, invalidateCache, invalidateCachePrefix, prefetchFolders, getCachedData, revalidateInBackground } from 'hooks/request'
+import { 
+  request, 
+  invalidateCache, 
+  invalidateCachePrefix, 
+  prefetchFolders, 
+  getCachedData, 
+  revalidateInBackground,
+  optimisticRemove,
+  cancelRequest,
+} from 'hooks/request'
 import { defineStore } from 'hooks/store'
 import { useToast } from 'hooks/toast'
 import { MenuItem } from 'primevue/menuitem'
@@ -143,11 +152,26 @@ export const useExplorer = defineStore('explorer', (store) => {
 
   const deleteItems = () => {
     const handleDelete = () => {
+      // Optimistic update - remove from UI immediately
+      const deletedNames = selectedItems.value.map(item => item.name)
+      const deletedFullnames = selectedItems.value.map(item => item.fullname)
+      
+      // Remove from current items immediately (optimistic)
+      items.value = items.value.filter(item => !deletedFullnames.includes(item.fullname))
+      
+      // Also update cache optimistically
+      deletedNames.forEach(name => optimisticRemove(currentPath.value, name))
+      
+      // Clear selection
+      const previousSelected = [...selectedItems.value]
+      selectedItems.value = []
+      currentSelected.value = undefined
+      
       request(`/delete`, {
         method: 'DELETE',
         body: JSON.stringify({
           uri: currentPath.value,
-          file_list: selectedItems.value.map((c) => c.fullname),
+          file_list: deletedFullnames,
         }),
       })
         .then(() => {
@@ -158,20 +182,23 @@ export const useExplorer = defineStore('explorer', (store) => {
             life: 2000,
           })
           // Invalidate cache for deleted folders
-          selectedItems.value.forEach(item => {
+          previousSelected.forEach(item => {
             if (item.type === 'folder') {
               invalidateCachePrefix(item.fullname)
             }
           })
+          // Force refresh to sync with server
           return forceRefresh()
         })
         .catch((err) => {
           toast.add({
             severity: 'error',
             summary: 'Error',
-            detail: err.message || 'Failed to load folder list.',
+            detail: err.message || 'Failed to delete.',
             life: 15000,
           })
+          // Rollback optimistic update on error
+          forceRefresh()
         })
     }
 
@@ -782,12 +809,19 @@ export const useExplorer = defineStore('explorer', (store) => {
     }
   }
 
+  // Track current navigation to prevent race conditions
+  let currentNavigationId = 0
+
   /**
    * Refresh with cache-first strategy:
    * 1. If cached: show instantly, revalidate in background
    * 2. If not cached: show loading, fetch from server
+   * 3. Cancel previous request if navigating quickly
    */
   const refresh = async () => {
+    // Increment navigation ID to invalidate previous requests
+    const navigationId = ++currentNavigationId
+    
     selectedItems.value = []
     currentSelected.value = undefined
     
@@ -808,27 +842,45 @@ export const useExplorer = defineStore('explorer', (store) => {
     loading.value = true
     items.value = []
     
-    return request(currentPath.value)
-      .then((resData) => {
-        processData(resData)
+    // Cancel any previous navigation request
+    cancelRequest('navigation')
+    
+    try {
+      const resData = await request(currentPath.value)
+      
+      // Check if this navigation is still current
+      if (navigationId !== currentNavigationId) {
+        return // Newer navigation started, ignore this result
+      }
+      
+      processData(resData)
+    } catch (err: any) {
+      // Ignore abort errors (from cancelled requests)
+      if (err.name === 'AbortError') return
+      
+      // Check if this navigation is still current
+      if (navigationId !== currentNavigationId) return
+      
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || 'Failed to load folder list.',
+        life: 15000,
       })
-      .catch((err) => {
-        toast.add({
-          severity: 'error',
-          summary: 'Error',
-          detail: err.message || 'Failed to load folder list.',
-          life: 15000,
-        })
-      })
-      .finally(() => {
+    } finally {
+      // Only hide loading if this is still the current navigation
+      if (navigationId === currentNavigationId) {
         loading.value = false
-      })
+      }
+    }
   }
 
   /**
    * Force refresh - always fetch from network (after mutations)
    */
   const forceRefresh = async () => {
+    const navigationId = ++currentNavigationId
+    
     loading.value = true
     items.value = []
     selectedItems.value = []
@@ -837,21 +889,27 @@ export const useExplorer = defineStore('explorer', (store) => {
     // Invalidate cache first
     invalidateCache(currentPath.value)
     
-    return request(currentPath.value)
-      .then((resData) => {
-        processData(resData)
+    try {
+      const resData = await request(currentPath.value)
+      
+      if (navigationId !== currentNavigationId) return
+      
+      processData(resData)
+    } catch (err: any) {
+      if (err.name === 'AbortError') return
+      if (navigationId !== currentNavigationId) return
+      
+      toast.add({
+        severity: 'error',
+        summary: 'Error',
+        detail: err.message || 'Failed to load folder list.',
+        life: 15000,
       })
-      .catch((err) => {
-        toast.add({
-          severity: 'error',
-          summary: 'Error',
-          detail: err.message || 'Failed to load folder list.',
-          life: 15000,
-        })
-      })
-      .finally(() => {
+    } finally {
+      if (navigationId === currentNavigationId) {
         loading.value = false
-      })
+      }
+    }
   }
 
   const clearStatus = () => {

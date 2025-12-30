@@ -2,6 +2,24 @@ import { useLoading } from 'hooks/loading'
 import { folderCache } from 'hooks/folderCache'
 import { api } from 'scripts/comfyAPI'
 import { onMounted, ref } from 'vue'
+import { 
+  deduplicatedRequest, 
+  cancellableRequest, 
+  cancelRequest,
+  queuePrefetch,
+  optimisticAdd,
+  optimisticRemove,
+  optimisticRename,
+} from 'hooks/requestManager'
+
+// Re-export for convenience
+export { 
+  cancelRequest, 
+  queuePrefetch,
+  optimisticAdd,
+  optimisticRemove,
+  optimisticRename,
+}
 
 /**
  * Get cached data instantly (synchronous, no network)
@@ -19,48 +37,60 @@ export const isCached = (url: string): boolean => {
 }
 
 /**
- * Low-level fetch with ETag/conditional request support
+ * Low-level fetch with ETag/conditional request support and deduplication
  */
 export const requestWithCache = async (url: string, options?: RequestInit & { skipCache?: boolean }) => {
   const cacheKey = url
-  const cachedEtag = options?.skipCache ? null : folderCache.getEtag(cacheKey)
   
-  const headers: Record<string, string> = {
-    ...(options?.headers as Record<string, string> || {}),
-  }
-  
-  // Add conditional request header if we have cached data
-  if (cachedEtag) {
-    headers['If-None-Match'] = cachedEtag
-  }
+  // Use deduplication to prevent parallel identical requests
+  return deduplicatedRequest(cacheKey, async () => {
+    const cachedEtag = options?.skipCache ? null : folderCache.getEtag(cacheKey)
+    
+    const headers: Record<string, string> = {
+      ...(options?.headers as Record<string, string> || {}),
+    }
+    
+    // Add conditional request header if we have cached data
+    if (cachedEtag) {
+      headers['If-None-Match'] = cachedEtag
+    }
 
-  const response = await api.fetchApi(`/image-browsing${url}`, {
-    ...options,
-    headers,
+    const response = await api.fetchApi(`/image-browsing${url}`, {
+      ...options,
+      headers,
+    })
+
+    // Handle 304 Not Modified - return cached data
+    if (response.status === 304) {
+      const cached = folderCache.get(cacheKey)
+      if (cached) {
+        return { data: cached.data, fromCache: true }
+      }
+      // Cache miss after 304 - shouldn't happen, but fallback to fresh request
+      return requestWithCache(url, { ...options, skipCache: true })
+    }
+
+    const resData = await response.json()
+    
+    if (resData.success) {
+      // Store in cache with ETag
+      const etag = response.headers.get('ETag') || response.headers.get('X-Folder-Hash') || ''
+      if (etag) {
+        folderCache.set(cacheKey, resData.data, etag)
+      }
+      return { data: resData.data, fromCache: false }
+    }
+    
+    throw new Error(resData.error)
   })
+}
 
-  // Handle 304 Not Modified - return cached data
-  if (response.status === 304) {
-    const cached = folderCache.get(cacheKey)
-    if (cached) {
-      return { data: cached.data, fromCache: true }
-    }
-    // Cache miss after 304 - shouldn't happen, but fallback to fresh request
-    return requestWithCache(url, { ...options, skipCache: true })
-  }
-
-  const resData = await response.json()
-  
-  if (resData.success) {
-    // Store in cache with ETag
-    const etag = response.headers.get('ETag') || response.headers.get('X-Folder-Hash') || ''
-    if (etag) {
-      folderCache.set(cacheKey, resData.data, etag)
-    }
-    return { data: resData.data, fromCache: false }
-  }
-  
-  throw new Error(resData.error)
+/**
+ * Cancellable folder request - cancels previous request when navigating quickly
+ */
+export const requestWithCancel = async <T>(url: string): Promise<T> => {
+  // Use 'navigation' as key - only one active navigation at a time
+  return cancellableRequest<T>('navigation', url)
 }
 
 /**
@@ -107,27 +137,17 @@ export const invalidateCachePrefix = (pathPrefix: string) => {
 }
 
 /**
- * Prefetch folder data in background
+ * Prefetch folder data in background with priority
  */
-export const prefetchFolder = async (path: string) => {
-  // Don't prefetch if already cached
-  if (folderCache.has(path)) return
-  
-  try {
-    await requestWithCache(path)
-  } catch {
-    // Ignore prefetch errors
-  }
+export const prefetchFolder = async (path: string, priority: number = 1) => {
+  queuePrefetch([path], priority)
 }
 
 /**
- * Prefetch multiple folders in parallel
+ * Prefetch multiple folders in parallel with priority
  */
-export const prefetchFolders = async (paths: string[]) => {
-  const uncached = paths.filter(p => !folderCache.has(p))
-  if (uncached.length === 0) return
-  
-  await Promise.allSettled(uncached.map(p => requestWithCache(p)))
+export const prefetchFolders = async (paths: string[], priority: number = 1) => {
+  queuePrefetch(paths, priority)
 }
 
 /**
@@ -139,6 +159,57 @@ export const revalidateInBackground = (path: string): void => {
   requestWithCache(path).catch(() => {
     // Ignore revalidation errors
   })
+}
+
+/**
+ * Batch fetch multiple folders in one request
+ */
+export const batchFetchFolders = async (paths: string[]): Promise<Record<string, any>> => {
+  if (paths.length === 0) return {}
+  
+  // Filter out already cached paths
+  const uncachedPaths = paths.filter(p => !folderCache.has(p))
+  
+  if (uncachedPaths.length === 0) {
+    // All cached - return from cache
+    const results: Record<string, any> = {}
+    for (const path of paths) {
+      results[path] = folderCache.getData(path)
+    }
+    return results
+  }
+  
+  // Fetch uncached paths in batch
+  const response = await api.fetchApi('/image-browsing/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths: uncachedPaths }),
+  })
+  
+  const data = await response.json()
+  
+  if (data.success) {
+    // Cache results
+    for (const [path, result] of Object.entries(data.data)) {
+      const r = result as any
+      if (r.data && r.etag) {
+        folderCache.set(path, r.data, r.etag)
+      }
+    }
+    
+    // Return all results (including already cached)
+    const results: Record<string, any> = {}
+    for (const path of paths) {
+      if (data.data[path]?.data) {
+        results[path] = data.data[path].data
+      } else {
+        results[path] = folderCache.getData(path)
+      }
+    }
+    return results
+  }
+  
+  throw new Error(data.error)
 }
 
 export interface RequestOptions<T> {

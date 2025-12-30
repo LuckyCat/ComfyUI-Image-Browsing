@@ -304,6 +304,62 @@ async def create_new_prompt(request):
 
 
 # ============================================================================
+# Batch requests - fetch multiple folders in one request
+# ============================================================================
+
+@routes.post("/image-browsing/batch")
+async def batch_folder_request(request):
+    """Fetch multiple folder contents in a single request"""
+    try:
+        data = await request.json()
+        paths = data.get("paths", [])
+        
+        if not paths or len(paths) > 50:  # Limit batch size
+            return web.json_response({
+                "success": False, 
+                "error": "Invalid paths (0 < len <= 50)"
+            }, status=400)
+        
+        results = {}
+        
+        async def fetch_folder(path: str):
+            try:
+                # Determine folder type and get real path
+                if path.startswith('/output'):
+                    pathname = utils.get_output_pathname(path)
+                    filepath = utils.get_real_output_filepath(pathname)
+                    items = await asyncio.to_thread(services.scan_directory_items, filepath)
+                elif path.startswith('/workflows'):
+                    pathname = utils.get_workflows_pathname(path)
+                    filepath = utils.get_real_workflows_filepath(pathname)
+                    items = await asyncio.to_thread(services.scan_workflows_directory, filepath)
+                elif path.startswith('/prompts'):
+                    pathname = utils.get_prompts_pathname(path)
+                    filepath = utils.get_real_prompts_filepath(pathname)
+                    items = await asyncio.to_thread(services.scan_prompts_directory, filepath)
+                else:
+                    return path, {"error": "Invalid path type"}
+                
+                etag = get_folder_etag(filepath)
+                return path, {"data": items, "etag": etag}
+            except Exception as e:
+                return path, {"error": str(e)}
+        
+        # Fetch all folders concurrently
+        tasks = [fetch_folder(path) for path in paths]
+        folder_results = await asyncio.gather(*tasks)
+        
+        for path, result in folder_results:
+            results[path] = result
+        
+        return web.json_response({"success": True, "data": results})
+    except Exception as e:
+        error_msg = f"Batch request failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+# ============================================================================
 # Output folder mutation routes
 # ============================================================================
 
