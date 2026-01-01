@@ -606,7 +606,8 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   word-break: break-all;
-  line-height: 1.3;
-  min-height: 2.6em;
+  line-height: 1.4;
+  min-height: 4.5em;
+  padding-bottom: 2px;
 }
 </style>
