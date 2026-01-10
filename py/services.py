@@ -8,8 +8,14 @@ import subprocess
 from threading import Lock
 
 from . import config
+from . import ffmpeg_config
 from . import utils
 from typing import Literal
+
+
+def _get_ffmpeg_cmd():
+    """Get FFmpeg command (path from config)"""
+    return ffmpeg_config.get_ffmpeg_path()
 
 
 def get_file_content_type(filename: str):
@@ -46,7 +52,7 @@ class DiskCache:
     """
     
     CONFIG_FILE = "cache_config.json"
-    DEFAULT_MAX_SIZE_GB = 1.0
+    DEFAULT_MAX_SIZE_GB = 2.0  # Increased from 1.0 for better caching
     
     def __init__(self, cache_dir: str):
         self.cache_dir = cache_dir
@@ -234,7 +240,7 @@ class CacheHelper:
         
         # Cleanup counter - run cleanup every N cache writes
         self._write_count = 0
-        self._cleanup_interval = 100
+        self._cleanup_interval = 200  # Increased from 100 - less frequent cleanup
 
     def get_cache(self, key: str):
         with self.cache_lock:
@@ -857,7 +863,7 @@ def merge_videos(file_list: list[str], output_name: str) -> str:
             f.write(f"file '{_escape_concat_path(rp)}'\n")
 
     base = [
-        "ffmpeg",
+        _get_ffmpeg_cmd(),
         "-hide_banner",
         "-loglevel",
         "error",
@@ -960,7 +966,7 @@ def extract_video_frame(video_path: str, frame_type: str = "first", timestamp: f
     if frame_type == "first":
         # Extract first frame
         cmd = [
-            "ffmpeg",
+            _get_ffmpeg_cmd(),
             "-hide_banner",
             "-loglevel", "error",
             "-y",
@@ -972,7 +978,7 @@ def extract_video_frame(video_path: str, frame_type: str = "first", timestamp: f
     elif frame_type == "current":
         # Extract frame at specific timestamp
         cmd = [
-            "ffmpeg",
+            _get_ffmpeg_cmd(),
             "-hide_banner",
             "-loglevel", "error",
             "-y",
@@ -1069,7 +1075,7 @@ def get_video_thumbnail(filename: str, max_size: int = 128) -> bytes | None:
     try:
         # Check if ffmpeg is available
         result = subprocess.run(
-            ['ffmpeg', '-version'],
+            [_get_ffmpeg_cmd(), '-version'],
             capture_output=True,
             timeout=5
         )
@@ -1081,7 +1087,7 @@ def get_video_thumbnail(filename: str, max_size: int = 128) -> bytes | None:
     try:
         # Extract frame at 1 second (or start if video is shorter)
         cmd = [
-            'ffmpeg',
+            _get_ffmpeg_cmd(),
             '-i', filename,
             '-ss', '00:00:01',  # Seek to 1 second
             '-vframes', '1',    # Extract 1 frame
@@ -1168,7 +1174,10 @@ def get_image_data(filename: str, max_size: int = 128):
             # Use faster resampling for small thumbnails
             if max_size <= 128:
                 resample = Image.Resampling.BILINEAR
-                quality = 65
+                quality = 60  # Lower quality for tiny thumbs - faster encoding
+            elif max_size <= 256:
+                resample = Image.Resampling.BILINEAR
+                quality = 70
             elif max_size <= 512:
                 resample = Image.Resampling.BILINEAR
                 quality = 75
@@ -1546,12 +1555,12 @@ def regenerate_thumbnail(file_path: str):
     Regenerate thumbnail for a file by removing it from cache
     """
     real_path = utils.get_real_output_filepath(file_path)
-    
+
     if not os.path.exists(real_path):
         raise FileNotFoundError(f"File not found: {file_path}")
-    
+
     # Get cache keys for different sizes and remove them
-    for max_size in [128, 256, 512]:
+    for max_size in [128, 256, 512, 1024]:
         cache_key = get_cache_key(real_path, max_size)
         cache_path = cache_helper.image_cache._get_cache_path(cache_key)
         if os.path.exists(cache_path):
@@ -1559,8 +1568,90 @@ def regenerate_thumbnail(file_path: str):
                 os.remove(cache_path)
             except OSError:
                 pass
-    
+
     return True
+
+
+def recache_folder(folder_path: str):
+    """
+    Force recache all files in a folder (regenerate all thumbnails)
+    Returns count of files recached
+    """
+    real_path = utils.get_real_output_filepath(folder_path)
+
+    if not os.path.exists(real_path):
+        raise FileNotFoundError(f"Folder not found: {folder_path}")
+
+    if not os.path.isdir(real_path):
+        raise ValueError(f"Not a folder: {folder_path}")
+
+    recached_count = 0
+
+    # Scan all files in folder
+    try:
+        with os.scandir(real_path) as it:
+            for entry in it:
+                if entry.is_file():
+                    filepath = entry.path
+                    if assert_file_type(filepath, ["image", "video"]):
+                        # Remove from cache
+                        for max_size in [128, 256, 512, 1024]:
+                            cache_key = get_cache_key(filepath, max_size)
+                            cache_path = cache_helper.image_cache._get_cache_path(cache_key)
+                            if os.path.exists(cache_path):
+                                try:
+                                    os.remove(cache_path)
+                                except OSError:
+                                    pass
+                        recached_count += 1
+    except OSError as e:
+        raise RuntimeError(f"Failed to recache folder: {e}")
+
+    # Invalidate folder cache
+    cache_helper.rm_cache(real_path)
+
+    utils.print_debug(f"Recached {recached_count} files in {folder_path}")
+    return {"count": recached_count}
+
+
+def precache_all_folders():
+    """
+    Pre-scan all folders and return folder structure with file counts.
+    This allows frontend to cache folder listings in localStorage.
+    Returns dictionary of folder paths with their metadata.
+    """
+    utils.print_debug("Pre-caching all folder listings...")
+
+    output_dir = config.output_uri
+    folder_data = {}
+
+    try:
+        for root, dirs, files in os.walk(output_dir):
+            # Count media files in this folder
+            media_files = []
+            for file in files:
+                filepath = os.path.join(root, file)
+                if assert_file_type(filepath, ["image", "video"]):
+                    media_files.append(file)
+
+            if media_files or dirs:  # Include folders with subfolders
+                # Get relative path for API
+                rel_path = os.path.relpath(root, output_dir)
+                if rel_path == '.':
+                    rel_path = ''
+
+                folder_data['/output/' + rel_path.replace('\\', '/')] = {
+                    'file_count': len(media_files),
+                    'has_subfolders': len(dirs) > 0,
+                    'mtime': os.path.getmtime(root)
+                }
+
+        utils.print_debug(f"Pre-cached {len(folder_data)} folders")
+        return folder_data
+
+    except Exception as e:
+        utils.print_error(f"Failed to precache folders: {e}")
+        return {}
 
 
 def copy_to_input_and_get_node(file_path: str, node_type: str):
@@ -1689,7 +1780,7 @@ def split_video_at_timestamp(video_path: str, timestamp: float):
     try:
         # Part 1: from start to timestamp (stream copy is fine for part1)
         subprocess.run([
-            'ffmpeg', '-y', '-i', real_path,
+            _get_ffmpeg_cmd(), '-y', '-i', real_path,
             '-t', str(timestamp),
             '-c', 'copy',
             '-avoid_negative_ts', 'make_zero',
@@ -1699,7 +1790,7 @@ def split_video_at_timestamp(video_path: str, timestamp: float):
         # Part 2: from timestamp to end
         # Use -ss after -i for frame-accurate seek, re-encode to fix timestamps
         subprocess.run([
-            'ffmpeg', '-y',
+            _get_ffmpeg_cmd(), '-y',
             '-i', real_path,
             '-ss', str(timestamp),
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
@@ -1711,7 +1802,7 @@ def split_video_at_timestamp(video_path: str, timestamp: float):
         
         # Extract frame at timestamp
         subprocess.run([
-            'ffmpeg', '-y',
+            _get_ffmpeg_cmd(), '-y',
             '-ss', str(timestamp),
             '-i', real_path,
             '-vframes', '1',
@@ -1758,7 +1849,7 @@ def reverse_video(video_path: str):
     try:
         # Reverse video and audio
         subprocess.run([
-            'ffmpeg', '-y',
+            _get_ffmpeg_cmd(), '-y',
             '-i', real_path,
             '-vf', 'reverse',
             '-af', 'areverse',

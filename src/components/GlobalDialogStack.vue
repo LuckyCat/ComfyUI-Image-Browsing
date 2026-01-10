@@ -238,12 +238,21 @@ const pollCacheStatus = async () => {
     if (wasRunning && !response.is_running && pollInterval) {
       clearInterval(pollInterval)
       pollInterval = null
-      
+
       if (response.phase === 'done') {
+        // Load folder metadata cache for instant navigation
+        try {
+          const { folderMetadataCache } = await import('hooks/folderMetadataCache')
+          await folderMetadataCache.loadAll()
+          console.log('[Cache] Folder metadata loaded for instant browsing!')
+        } catch (err) {
+          console.error('[Cache] Failed to load folder metadata:', err)
+        }
+
         toast.add({
           severity: 'success',
           summary: 'Caching Complete',
-          detail: `Processed ${response.total} files (${response.skipped} already cached, ${response.errors} errors)`,
+          detail: `Processed ${response.total} files (${response.skipped} already cached). All folders cached for instant browsing!`,
           life: 5000,
         })
       }
@@ -256,12 +265,12 @@ const pollCacheStatus = async () => {
 const startCacheAll = async () => {
   try {
     const size = THUMBNAIL_SIZES[currentSize.value]
-    
+
     // Get current folder from explorer if available
     let priorityFolder: string | null = null
     try {
       // Try to get current path from URL or some global state
-      const hashPath = window.location.hash.includes('/output') 
+      const hashPath = window.location.hash.includes('/output')
         ? decodeURIComponent(window.location.hash.split('/output')[1]?.split('?')[0] || '')
         : null
       if (hashPath) {
@@ -270,30 +279,31 @@ const startCacheAll = async () => {
     } catch {
       // Ignore
     }
-    
+
     await request('/cache-all', {
       method: 'POST',
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         max_size: size,
-        priority_folder: priorityFolder 
+        priority_folder: priorityFolder,
+        cache_folders: true  // NEW: also cache folder listings
       }),
     })
-    
+
     toast.add({
       severity: 'info',
       summary: 'Caching Started',
-      detail: 'Scanning folders and processing thumbnails...',
+      detail: 'Scanning folders, processing thumbnails, and caching folder listings...',
       life: 3000,
     })
-    
+
     cacheStatus.value.is_running = true
     cacheStatus.value.is_paused = false
     cacheStatus.value.phase = 'counting'
-    
+
     if (!pollInterval) {
       pollInterval = window.setInterval(pollCacheStatus, 500)
     }
-    
+
   } catch (err: any) {
     toast.add({
       severity: 'error',

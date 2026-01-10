@@ -15,8 +15,8 @@ interface FolderCacheConfig {
 }
 
 const DEFAULT_CONFIG: FolderCacheConfig = {
-  maxEntries: 500,           // Store up to 500 folders
-  maxAgeMs: 24 * 60 * 60 * 1000, // 24 hours - ETag validation ensures freshness anyway
+  maxEntries: 1000,           // Store up to 1000 folders (increased from 500)
+  maxAgeMs: 365 * 24 * 60 * 60 * 1000, // 1 year - cache forever, ETag validation ensures freshness
 }
 
 class FolderCache {
@@ -31,7 +31,7 @@ class FolderCache {
 
   private loadFromStorage() {
     try {
-      const stored = sessionStorage.getItem('folderCache')
+      const stored = localStorage.getItem('folderCache')
       if (stored) {
         const parsed = JSON.parse(stored)
         const now = Date.now()
@@ -45,7 +45,8 @@ class FolderCache {
         }
       }
     } catch (e) {
-      // Ignore storage errors
+      // Ignore storage errors - might be corrupted or quota exceeded
+      console.warn('Failed to load folder cache from localStorage:', e)
     }
   }
 
@@ -55,18 +56,20 @@ class FolderCache {
       for (const [key, entry] of this.cache.entries()) {
         obj[key] = entry
       }
-      sessionStorage.setItem('folderCache', JSON.stringify(obj))
+      localStorage.setItem('folderCache', JSON.stringify(obj))
     } catch (e) {
-      // Storage full or unavailable - clear old entries
+      // Storage full or unavailable - clear old entries and retry
+      console.warn('localStorage quota exceeded, evicting old entries...')
       try {
-        this.evictOldest(this.cache.size / 2)
+        this.evictOldest(Math.floor(this.cache.size / 2))
         const obj: Record<string, CacheEntry<any>> = {}
         for (const [key, entry] of this.cache.entries()) {
           obj[key] = entry
         }
-        sessionStorage.setItem('folderCache', JSON.stringify(obj))
+        localStorage.setItem('folderCache', JSON.stringify(obj))
       } catch {
-        // Give up on storage
+        // Give up on storage - continue without persistence
+        console.error('Failed to save to localStorage after eviction')
       }
     }
   }
@@ -167,7 +170,7 @@ class FolderCache {
   clear() {
     this.cache.clear()
     this.accessOrder = []
-    sessionStorage.removeItem('folderCache')
+    localStorage.removeItem('folderCache')
   }
 
   getStats() {

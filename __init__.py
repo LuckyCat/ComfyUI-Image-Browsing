@@ -25,10 +25,22 @@ utils.download_web_distribution(version)
 
 
 from aiohttp import web
-from .py import services
+from .py import services, ffmpeg_config
 
 
 routes = config.routes
+
+
+# ============================================================================
+# Compression helper for JSON responses
+# ============================================================================
+
+def json_response_compressed(data, **kwargs):
+    """Create compressed JSON response for large payloads"""
+    response = web.json_response(data, **kwargs)
+    # Enable gzip compression for responses > 1KB
+    response.enable_compression()
+    return response
 
 
 def get_folder_etag(directory: str) -> str:
@@ -61,7 +73,22 @@ async def scan_output_folder(request):
 
             preview_type = request.query.get("preview", None)
             if not preview_type:
-                return web.FileResponse(filepath)
+                # Full size file - cache forever with ETag validation
+                stat = os.stat(filepath)
+                etag = f'"{stat.st_mtime}-{stat.st_size}"'
+
+                # Check if client has cached version
+                if_none_match = request.headers.get('If-None-Match', '')
+                if if_none_match == etag:
+                    return web.Response(status=304)
+
+                return web.FileResponse(
+                    filepath,
+                    headers={
+                        "Cache-Control": "public, max-age=31536000, immutable",  # 1 year (effectively forever)
+                        "ETag": etag
+                    }
+                )
 
             if services.assert_file_type(filepath, ["image"]):
                 # Get max_size from query params, default to 128
@@ -70,18 +97,26 @@ async def scan_output_folder(request):
                     max_size = int(max_size_str)
                 except ValueError:
                     max_size = 128
-                
+
+                cache_key = services.get_cache_key(filepath, max_size)
+                etag = f'"{cache_key}"'
+
+                # Check if client has cached version
+                if_none_match = request.headers.get('If-None-Match', '')
+                if if_none_match == etag:
+                    return web.Response(status=304)
+
                 image_data = services.get_image_data(filepath, max_size)
-                # Add cache headers - cache for 1 hour in browser
+                # Cache forever - only invalidate on manual recache
                 return web.Response(
-                    body=image_data.getvalue(), 
+                    body=image_data.getvalue(),
                     content_type="image/webp",
                     headers={
-                        "Cache-Control": "public, max-age=3600",
-                        "ETag": f'"{services.get_cache_key(filepath, max_size)}"'
+                        "Cache-Control": "public, max-age=31536000, immutable",  # 1 year (effectively forever)
+                        "ETag": etag
                     }
                 )
-            
+
             if services.assert_file_type(filepath, ["video"]):
                 # Get max_size from query params, default to 128
                 max_size_str = request.query.get("max_size", "128")
@@ -89,14 +124,23 @@ async def scan_output_folder(request):
                     max_size = int(max_size_str)
                 except ValueError:
                     max_size = 128
-                
+
+                cache_key = services.get_cache_key(filepath, max_size)
+                etag = f'"{cache_key}"'
+
+                # Check if client has cached version
+                if_none_match = request.headers.get('If-None-Match', '')
+                if if_none_match == etag:
+                    return web.Response(status=304)
+
                 image_data = services.get_image_data(filepath, max_size)
+                # Cache forever - only invalidate on manual recache
                 return web.Response(
-                    body=image_data.getvalue(), 
+                    body=image_data.getvalue(),
                     content_type="image/webp",
                     headers={
-                        "Cache-Control": "public, max-age=3600",
-                        "ETag": f'"{services.get_cache_key(filepath, max_size)}"'
+                        "Cache-Control": "public, max-age=31536000, immutable",  # 1 year (effectively forever)
+                        "ETag": etag
                     }
                 )
 
@@ -105,11 +149,14 @@ async def scan_output_folder(request):
             etag = get_folder_etag(filepath)
             if check_etag_match(request, etag):
                 return web.Response(status=304)
-            
+
             items = await asyncio.to_thread(services.scan_directory_items, filepath)
-            return web.json_response(
+            return json_response_compressed(
                 {"success": True, "data": items},
-                headers={"ETag": etag, "Cache-Control": "private, no-cache"}
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": "private, max-age=300, must-revalidate"  # 5 minutes with revalidation
+                }
             )
 
         return web.Response(status=404)
@@ -131,18 +178,36 @@ async def scan_workflows_folder(request):
         filepath = utils.get_real_workflows_filepath(pathname)
 
         if os.path.isfile(filepath):
-            return web.FileResponse(filepath)
+            # Cache workflow files forever with ETag validation
+            stat = os.stat(filepath)
+            etag = f'"{stat.st_mtime}-{stat.st_size}"'
+
+            # Check if client has cached version
+            if_none_match = request.headers.get('If-None-Match', '')
+            if if_none_match == etag:
+                return web.Response(status=304)
+
+            return web.FileResponse(
+                filepath,
+                headers={
+                    "Cache-Control": "public, max-age=31536000, immutable",  # 1 year
+                    "ETag": etag
+                }
+            )
 
         elif os.path.isdir(filepath):
             # Check ETag for conditional request (304 Not Modified)
             etag = get_folder_etag(filepath)
             if check_etag_match(request, etag):
                 return web.Response(status=304)
-            
+
             items = await asyncio.to_thread(services.scan_workflows_directory, filepath)
-            return web.json_response(
+            return json_response_compressed(
                 {"success": True, "data": items},
-                headers={"ETag": etag, "Cache-Control": "private, no-cache"}
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": "private, max-age=300, must-revalidate"  # 5 minutes
+                }
             )
 
         return web.Response(status=404)
@@ -221,11 +286,14 @@ async def scan_prompts_folder(request):
             etag = get_folder_etag(filepath)
             if check_etag_match(request, etag):
                 return web.Response(status=304)
-            
+
             items = await asyncio.to_thread(services.scan_prompts_directory, filepath)
-            return web.json_response(
+            return json_response_compressed(
                 {"success": True, "data": items},
-                headers={"ETag": etag, "Cache-Control": "private, no-cache"}
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": "private, max-age=300, must-revalidate"  # 5 minutes
+                }
             )
 
         return web.Response(status=404)
@@ -351,8 +419,8 @@ async def batch_folder_request(request):
         
         for path, result in folder_results:
             results[path] = result
-        
-        return web.json_response({"success": True, "data": results})
+
+        return json_response_compressed({"success": True, "data": results})
     except Exception as e:
         error_msg = f"Batch request failed: {str(e)}"
         utils.print_error(error_msg)
@@ -450,18 +518,39 @@ async def merge_videos(request):
 
 @routes.post("/image-browsing/cache-all")
 async def cache_all_thumbnails(request):
-    """Start caching all thumbnails in background"""
+    """Start caching all thumbnails AND folder listings in background"""
     try:
         data = await request.json()
         max_size = data.get("max_size", 128)
         priority_folder = data.get("priority_folder", None)
-        
+        cache_folders = data.get("cache_folders", True)  # NEW: cache folder listings too
+
         # Start caching in background
-        asyncio.create_task(asyncio.to_thread(services.cache_all_images, max_size, 4, priority_folder))
-        
+        async def cache_everything():
+            # Cache thumbnails
+            await asyncio.to_thread(services.cache_all_images, max_size, 4, priority_folder)
+
+            # Also pre-cache folder listings if requested
+            if cache_folders:
+                await asyncio.to_thread(services.precache_all_folders)
+
+        asyncio.create_task(cache_everything())
+
         return web.json_response({"success": True, "message": "Caching started"})
     except Exception as e:
         error_msg = f"Cache failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.get("/image-browsing/folder-metadata")
+async def get_folder_metadata(request):
+    """Get pre-cached folder metadata for client-side caching"""
+    try:
+        metadata = await asyncio.to_thread(services.precache_all_folders)
+        return json_response_compressed({"success": True, "data": metadata})
+    except Exception as e:
+        error_msg = f"Failed to get folder metadata: {str(e)}"
         utils.print_error(error_msg)
         return web.json_response({"success": False, "error": error_msg})
 
@@ -632,14 +721,32 @@ async def refresh_thumbnail(request):
     try:
         data = await request.json()
         file_path = data.get("file_path", None)
-        
+
         if not file_path:
             return web.json_response({"success": False, "error": "Missing file_path"}, status=400)
-        
+
         await asyncio.to_thread(services.regenerate_thumbnail, file_path)
         return web.json_response({"success": True})
     except Exception as e:
         error_msg = f"Refresh thumbnail failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/recache-folder")
+async def recache_folder(request):
+    """Force recache all files in a folder (regenerate all thumbnails)"""
+    try:
+        data = await request.json()
+        folder_path = data.get("folder_path", None)
+
+        if not folder_path:
+            return web.json_response({"success": False, "error": "Missing folder_path"}, status=400)
+
+        result = await asyncio.to_thread(services.recache_folder, folder_path)
+        return web.json_response({"success": True, "data": result})
+    except Exception as e:
+        error_msg = f"Recache folder failed: {str(e)}"
         utils.print_error(error_msg)
         return web.json_response({"success": False, "error": error_msg})
 
@@ -696,6 +803,110 @@ async def reverse_video(request):
         return web.json_response({"success": True, "data": result})
     except Exception as e:
         error_msg = f"Reverse video failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+# ============================================================================
+# FFmpeg configuration routes
+# ============================================================================
+
+@routes.get("/image-browsing/ffmpeg/status")
+async def get_ffmpeg_status(request):
+    """Get FFmpeg configuration and status"""
+    try:
+        current_path = ffmpeg_config.get_ffmpeg_path()
+        test_result = await asyncio.to_thread(ffmpeg_config.test_ffmpeg, current_path)
+        detected = await asyncio.to_thread(ffmpeg_config.detect_ffmpeg)
+
+        return web.json_response({
+            "success": True,
+            "data": {
+                "current_path": current_path,
+                "test": test_result,
+                "detected_paths": detected
+            }
+        })
+    except Exception as e:
+        error_msg = f"FFmpeg status failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/ffmpeg/set-path")
+async def set_ffmpeg_path(request):
+    """Set FFmpeg path"""
+    try:
+        data = await request.json()
+        ffmpeg_path = data.get("path", None)
+
+        if not ffmpeg_path:
+            return web.json_response({"success": False, "error": "Missing path"}, status=400)
+
+        # Test the path first
+        test_result = await asyncio.to_thread(ffmpeg_config.test_ffmpeg, ffmpeg_path)
+
+        if not test_result['available']:
+            return web.json_response({
+                "success": False,
+                "error": f"FFmpeg not working: {test_result['error']}"
+            })
+
+        # Save if test passed
+        success = await asyncio.to_thread(ffmpeg_config.set_ffmpeg_path, ffmpeg_path)
+
+        if success:
+            return web.json_response({
+                "success": True,
+                "message": "FFmpeg path saved",
+                "data": test_result
+            })
+        else:
+            return web.json_response({
+                "success": False,
+                "error": "Failed to save FFmpeg path"
+            })
+
+    except Exception as e:
+        error_msg = f"Set FFmpeg path failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/ffmpeg/auto-detect")
+async def auto_detect_ffmpeg(request):
+    """Auto-detect FFmpeg and set the best path"""
+    try:
+        detected = await asyncio.to_thread(ffmpeg_config.detect_ffmpeg)
+
+        if not detected:
+            return web.json_response({
+                "success": False,
+                "error": "No FFmpeg installation found"
+            })
+
+        # Use first detected (usually system PATH)
+        best_path = detected[0]['path']
+        success = await asyncio.to_thread(ffmpeg_config.set_ffmpeg_path, best_path)
+
+        if success:
+            test_result = await asyncio.to_thread(ffmpeg_config.test_ffmpeg, best_path)
+            return web.json_response({
+                "success": True,
+                "message": f"FFmpeg auto-detected: {detected[0]['location']}",
+                "data": {
+                    "path": best_path,
+                    "test": test_result
+                }
+            })
+        else:
+            return web.json_response({
+                "success": False,
+                "error": "Failed to save auto-detected path"
+            })
+
+    except Exception as e:
+        error_msg = f"Auto-detect failed: {str(e)}"
         utils.print_error(error_msg)
         return web.json_response({"success": False, "error": error_msg})
 

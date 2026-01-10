@@ -201,7 +201,7 @@ interface PrefetchItem {
 
 let prefetchQueue: PrefetchItem[] = []
 let isPrefetching = false
-const MAX_CONCURRENT_PREFETCH = 3
+const MAX_CONCURRENT_PREFETCH = 6  // Increased from 3 for aggressive prefetching
 let activePrefetches = 0
 
 /**

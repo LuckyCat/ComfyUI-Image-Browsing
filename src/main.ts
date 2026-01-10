@@ -11,6 +11,17 @@ import App from './App.vue'
 import { i18n } from './i18n'
 import './style.css'
 
+// Service Worker для offline-first кеширования (опционально)
+// Можно закомментировать если не нужен
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/extensions/ComfyUI-Image-Browsing/sw.js')
+      .then(reg => console.log('[SW] Registered:', reg.scope))
+      .catch(err => console.warn('[SW] Registration failed:', err))
+  })
+}
+
 const ComfyUIPreset = definePreset(Aura, {
   semantic: {
     primary: Aura['primitive'].blue,
