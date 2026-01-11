@@ -13,6 +13,7 @@ import GlobalLoading from 'components/GlobalLoading.vue'
 import GlobalPreview from 'components/GlobalPreview.vue'
 import GlobalToast from 'components/GlobalToast.vue'
 import { useStoreProvider } from 'hooks/store'
+import { usePathsSettings } from 'hooks/pathsSettings'
 import GlobalConfirm from 'primevue/confirmdialog'
 import { $el, app, ComfyButton } from 'scripts/comfyAPI'
 import { onMounted, onUnmounted } from 'vue'
@@ -20,6 +21,9 @@ import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
 const { dialog, explorer } = useStoreProvider()
+
+// Initialize paths settings store
+usePathsSettings()
 
 const keyboardListener = ($event: KeyboardEvent) => {
   if ($event.key === 'Delete') {

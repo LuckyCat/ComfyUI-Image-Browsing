@@ -6,16 +6,24 @@ from .py import config
 
 
 config.extension_uri = os.path.dirname(__file__)
-config.output_uri = folder_paths.get_output_directory()
 
-# Get ComfyUI base directory for workflows
-comfyui_base = os.path.dirname(folder_paths.get_output_directory())
-config.workflows_uri = os.path.join(comfyui_base, "user", "default", "workflows")
-config.prompts_uri = os.path.join(comfyui_base, "user", "default", "prompts")
+# Import paths_config early to load configuration
+from .py import paths_config
 
-# Create prompts directory if it doesn't exist
-if not os.path.exists(config.prompts_uri):
-    os.makedirs(config.prompts_uri)
+# Load paths from configuration
+paths = paths_config.load_paths_config()
+config.output_uri = paths['output']
+config.workflows_uri = paths['workflows']
+config.prompts_uri = paths['prompts']
+config.thumbnail_cache_uri = paths['thumbnail_cache']
+
+# Create directories if they don't exist
+for path_name, path_value in paths.items():
+    if path_value and not os.path.exists(path_value):
+        try:
+            os.makedirs(path_value, exist_ok=True)
+        except Exception as e:
+            print(f"Warning: Failed to create {path_name} directory at {path_value}: {e}")
 
 
 from .py import utils
@@ -907,6 +915,152 @@ async def auto_detect_ffmpeg(request):
 
     except Exception as e:
         error_msg = f"Auto-detect failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+# ============================================================================
+# Paths Configuration Routes
+# ============================================================================
+
+@routes.get("/image-browsing/paths/status")
+async def get_paths_status(request):
+    """Get all configured paths with their status"""
+    try:
+        paths_info = await asyncio.to_thread(paths_config.get_all_paths)
+
+        return web.json_response({
+            "success": True,
+            "data": paths_info
+        })
+    except Exception as e:
+        error_msg = f"Get paths status failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/paths/set")
+async def set_path_config(request):
+    """Set a specific path configuration"""
+    try:
+        data = await request.json()
+        path_type = data.get("type", None)
+        path_value = data.get("path", None)
+
+        if not path_type:
+            return web.json_response({"success": False, "error": "Missing path type"}, status=400)
+
+        if not path_value:
+            return web.json_response({"success": False, "error": "Missing path value"}, status=400)
+
+        # Validate the path
+        validation = await asyncio.to_thread(
+            paths_config.validate_path,
+            path_value,
+            should_exist=False,
+            create_if_missing=True
+        )
+
+        if not validation.get('valid'):
+            return web.json_response({
+                "success": False,
+                "error": f"Invalid path: {validation.get('error')}"
+            })
+
+        # Save the path
+        success = await asyncio.to_thread(paths_config.set_path, path_type, path_value)
+
+        if success:
+            # Update in-memory config immediately
+            if path_type == 'thumbnail_cache':
+                config.thumbnail_cache_uri = path_value
+                # Note: Cache will need to be reinitialized to use new path
+            elif path_type == 'output':
+                config.output_uri = path_value
+            elif path_type == 'workflows':
+                config.workflows_uri = path_value
+            elif path_type == 'prompts':
+                config.prompts_uri = path_value
+
+            return web.json_response({
+                "success": True,
+                "message": f"{path_type} path updated successfully",
+                "data": {
+                    "type": path_type,
+                    "path": path_value,
+                    "validation": validation
+                }
+            })
+        else:
+            return web.json_response({
+                "success": False,
+                "error": "Failed to save path configuration"
+            })
+
+    except ValueError as e:
+        return web.json_response({"success": False, "error": str(e)}, status=400)
+    except Exception as e:
+        error_msg = f"Set path failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/paths/reset")
+async def reset_paths_config(request):
+    """Reset all paths to default values"""
+    try:
+        success = await asyncio.to_thread(paths_config.reset_to_defaults)
+
+        if success:
+            # Reload paths into config
+            paths = await asyncio.to_thread(paths_config.load_paths_config)
+            config.output_uri = paths['output']
+            config.workflows_uri = paths['workflows']
+            config.prompts_uri = paths['prompts']
+            config.thumbnail_cache_uri = paths['thumbnail_cache']
+
+            return web.json_response({
+                "success": True,
+                "message": "All paths reset to defaults",
+                "data": paths
+            })
+        else:
+            return web.json_response({
+                "success": False,
+                "error": "Failed to reset paths"
+            })
+
+    except Exception as e:
+        error_msg = f"Reset paths failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/paths/validate")
+async def validate_path_endpoint(request):
+    """Validate a path without saving it"""
+    try:
+        data = await request.json()
+        path_value = data.get("path", None)
+        create_if_missing = data.get("create_if_missing", False)
+
+        if not path_value:
+            return web.json_response({"success": False, "error": "Missing path value"}, status=400)
+
+        validation = await asyncio.to_thread(
+            paths_config.validate_path,
+            path_value,
+            should_exist=False,
+            create_if_missing=create_if_missing
+        )
+
+        return web.json_response({
+            "success": validation.get('valid', False),
+            "data": validation
+        })
+
+    except Exception as e:
+        error_msg = f"Validate path failed: {str(e)}"
         utils.print_error(error_msg)
         return web.json_response({"success": False, "error": error_msg})
 

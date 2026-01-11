@@ -233,9 +233,10 @@ class CacheHelper:
     def __init__(self) -> None:
         self.cache: dict[str, tuple[list, float]] = {}
         self.cache_lock = Lock()
-        
-        # Initialize disk cache in plugin directory
-        cache_dir = os.path.join(config.extension_uri, "thumbnail_cache")
+
+        # Initialize disk cache using configured path
+        # Falls back to default if not configured
+        cache_dir = getattr(config, 'thumbnail_cache_uri', None) or os.path.join(config.extension_uri, "thumbnail_cache")
         self.image_cache = DiskCache(cache_dir)
         
         # Cleanup counter - run cleanup every N cache writes
