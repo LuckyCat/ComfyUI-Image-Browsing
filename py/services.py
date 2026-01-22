@@ -1324,12 +1324,13 @@ def clear_cache():
 
 
 # ============================================================================
-# Parallel caching with pause/resume support
+# Parallel caching with pause/resume support and auto-pause on user activity
 # ============================================================================
 
 _cache_status = {
     "is_running": False,
     "is_paused": False,
+    "auto_paused": False,  # Automatically paused due to user activity
     "phase": "",  # "scanning", "caching", "done"
     "total": 0,
     "processed": 0,
@@ -1342,6 +1343,62 @@ _cache_status = {
     "folders_done": 0,
 }
 _cache_status_lock = Lock()
+
+# Track user activity for auto-pause
+_last_user_activity = 0.0
+_preview_mode_until = 0.0  # When in preview mode, pause ALL background work
+_browsing_mode_until = 0.0  # When browsing folders, pause cache-all
+_user_activity_lock = Lock()
+AUTO_PAUSE_THRESHOLD = 0.3  # Pause caching if user was active within this many seconds
+PREVIEW_MODE_DURATION = 2.0  # How long to stay in preview mode
+BROWSING_MODE_DURATION = 3.0  # How long to pause cache-all when navigating folders
+
+
+def signal_user_activity():
+    """Signal that user is actively using the browser (called from request handlers)"""
+    global _last_user_activity
+    import time
+    with _user_activity_lock:
+        _last_user_activity = time.time()
+
+
+def signal_browsing_mode():
+    """Signal that user is navigating folders - pause cache-all to prioritize current folder"""
+    global _browsing_mode_until, _last_user_activity
+    import time
+    with _user_activity_lock:
+        now = time.time()
+        _browsing_mode_until = now + BROWSING_MODE_DURATION
+        _last_user_activity = now
+
+
+def signal_preview_mode():
+    """Signal that user is viewing a file - pause ALL background work immediately"""
+    global _preview_mode_until
+    import time
+    with _user_activity_lock:
+        _preview_mode_until = time.time() + PREVIEW_MODE_DURATION
+
+
+def is_user_active() -> bool:
+    """Check if user has been active recently"""
+    import time
+    with _user_activity_lock:
+        return (time.time() - _last_user_activity) < AUTO_PAUSE_THRESHOLD
+
+
+def is_browsing_mode() -> bool:
+    """Check if user is actively browsing folders"""
+    import time
+    with _user_activity_lock:
+        return time.time() < _browsing_mode_until
+
+
+def is_preview_mode() -> bool:
+    """Check if we're in preview mode (should pause all background work)"""
+    import time
+    with _user_activity_lock:
+        return time.time() < _preview_mode_until
 
 
 def get_cache_status():
@@ -1394,83 +1451,142 @@ def _process_single_file(args):
         return ("error", filepath, str(e))
 
 
-def cache_all_images(max_size: int = 128, num_workers: int = 1, priority_folder: str = None):
+def cache_folder_structure():
     """
-    Cache all images and videos in output directory.
-    
-    Phases:
-    1. Quick scan - count files in each folder (fast, updates UI immediately)
-    2. Caching - process files with low priority (yields to user operations)
+    Phase 1: Cache folder structure, file names, and counts.
+    This is fast and should complete quickly to enable instant navigation.
+    Returns folder metadata for frontend caching.
     """
     global _cache_status
-    
+
     import time
-    
+
     with _cache_status_lock:
-        if _cache_status["is_running"]:
-            return {"error": "Caching already in progress"}
+        if _cache_status["is_running"] and _cache_status["phase"] == "thumbnails":
+            # Already running thumbnail phase, don't interrupt
+            return {"error": "Thumbnail caching in progress"}
         _cache_status["is_running"] = True
         _cache_status["is_paused"] = False
-        _cache_status["phase"] = "scanning"
-        _cache_status["total"] = 0
-        _cache_status["processed"] = 0
-        _cache_status["skipped"] = 0
-        _cache_status["errors"] = 0
+        _cache_status["auto_paused"] = False
+        _cache_status["phase"] = "folders"
         _cache_status["current_file"] = ""
         _cache_status["folder_counts"] = {}
-        _cache_status["cached_folders"] = []  # Folders where caching is complete
         _cache_status["folders_total"] = 0
         _cache_status["folders_done"] = 0
-    
+
     try:
         output_dir = config.output_uri
-        
-        # =====================================================================
-        # Phase 1: Quick scan - just count files, no heavy processing
-        # =====================================================================
-        utils.print_debug("Phase 1: Quick scanning folders...")
-        
-        folder_files_map = {}  # folder_path -> list of file paths
-        folder_counts = {}
-        
+        folder_data = {}
+        folder_files_map = {}
+
+        utils.print_debug("Phase 1: Caching folder structure...")
+
         for root, dirs, files in os.walk(output_dir):
             with _cache_status_lock:
                 if not _cache_status["is_running"]:
                     return {"stopped": True}
                 _cache_status["current_file"] = f"Scanning: {os.path.basename(root)}"
-            
+
+            # Scan this folder - this caches the directory listing
+            items = scan_directory_items(root)
+
+            # Count media files
             media_files = []
             for file in files:
                 filepath = os.path.join(root, file)
                 if assert_file_type(filepath, ["image", "video"]):
                     media_files.append(filepath)
-            
-            if media_files:
+
+            if media_files or dirs:
                 folder_files_map[root] = media_files
-                folder_counts[root] = len(media_files)
                 set_folder_file_count(root, len(media_files))
-                
-                # Update status immediately so UI can show counts
+
+                # Build relative path for API
+                rel_path = os.path.relpath(root, output_dir)
+                if rel_path == '.':
+                    api_path = '/output'
+                else:
+                    api_path = '/output/' + rel_path.replace('\\', '/')
+
+                folder_data[api_path] = {
+                    'file_count': len(media_files),
+                    'has_subfolders': len(dirs) > 0,
+                    'mtime': os.path.getmtime(root)
+                }
+
                 with _cache_status_lock:
                     _cache_status["folder_counts"][root] = len(media_files)
-        
-        # Calculate totals
+                    _cache_status["folders_done"] += 1
+
+        total_folders = len(folder_data)
         total_files = sum(len(files) for files in folder_files_map.values())
-        total_folders = len(folder_files_map)
-        
+
         with _cache_status_lock:
-            _cache_status["total"] = total_files
             _cache_status["folders_total"] = total_folders
-            _cache_status["phase"] = "caching"
+            _cache_status["total"] = total_files
+            _cache_status["phase"] = "folders_done"
             _cache_status["current_file"] = ""
-        
-        utils.print_debug(f"Phase 1 complete: {total_files} files in {total_folders} folders")
-        
-        # =====================================================================
-        # Phase 2: Cache files folder by folder with low priority
-        # =====================================================================
-        utils.print_debug(f"Phase 2: Caching with {num_workers} workers...")
-        
+
+        utils.print_debug(f"Phase 1 complete: {total_folders} folders, {total_files} files indexed")
+
+        return {
+            "success": True,
+            "folders": total_folders,
+            "files": total_files,
+            "folder_data": folder_data,
+            "folder_files_map": folder_files_map
+        }
+
+    except Exception as e:
+        with _cache_status_lock:
+            _cache_status["is_running"] = False
+        utils.print_error(f"Folder structure caching failed: {e}")
+        return {"error": str(e)}
+
+
+def cache_all_images(max_size: int = 128, num_workers: int = 1, priority_folder: str = None):
+    """
+    Two-phase caching:
+    Phase 1: Cache folder structure (fast, enables navigation)
+    Phase 2: Generate thumbnails (slow, background)
+
+    Auto-pauses when user is actively browsing to ensure responsive UI.
+    """
+    global _cache_status
+
+    import time
+
+    # =========================================================================
+    # Phase 1: Folder Structure (FAST - completes first)
+    # =========================================================================
+    folder_result = cache_folder_structure()
+
+    if "error" in folder_result:
+        return folder_result
+    if folder_result.get("stopped"):
+        return folder_result
+
+    folder_files_map = folder_result.get("folder_files_map", {})
+    total_files = folder_result.get("files", 0)
+    total_folders = folder_result.get("folders", 0)
+
+    # =========================================================================
+    # Phase 2: Thumbnails (SLOW - can be interrupted)
+    # =========================================================================
+    with _cache_status_lock:
+        if not _cache_status["is_running"]:
+            return {"stopped": True}
+        _cache_status["phase"] = "thumbnails"
+        _cache_status["processed"] = 0
+        _cache_status["skipped"] = 0
+        _cache_status["errors"] = 0
+        _cache_status["current_file"] = ""
+        _cache_status["cached_folders"] = []
+        _cache_status["folders_done"] = 0
+
+    utils.print_debug(f"Phase 2: Caching thumbnails with {num_workers} workers...")
+
+    try:
         # Sort folders - priority folder first if specified
         folder_list = list(folder_files_map.keys())
         if priority_folder:
@@ -1489,15 +1605,29 @@ def cache_all_images(max_size: int = 128, num_workers: int = 1, priority_folder:
             with _cache_status_lock:
                 if not _cache_status["is_running"]:
                     break
-            
-            # Wait while paused
+
+            # Wait while paused (manual or auto)
             while True:
                 with _cache_status_lock:
-                    if not _cache_status["is_paused"]:
-                        break
-                    if not _cache_status["is_running"]:
-                        break
-                time.sleep(0.5)
+                    manual_paused = _cache_status["is_paused"]
+                    running = _cache_status["is_running"]
+
+                # Check for user activity, browsing mode, and preview mode (auto-pause)
+                user_active = is_user_active()
+                browsing_active = is_browsing_mode()
+                preview_active = is_preview_mode()
+                should_pause = user_active or browsing_active or preview_active
+
+                with _cache_status_lock:
+                    _cache_status["auto_paused"] = should_pause
+
+                if not running:
+                    break
+                if not manual_paused and not should_pause:
+                    break
+
+                # Shorter sleep for faster resume when user stops browsing
+                time.sleep(0.05)
             
             files_in_folder = folder_files_map[folder_path]
             

@@ -14,6 +14,8 @@ import GlobalPreview from 'components/GlobalPreview.vue'
 import GlobalToast from 'components/GlobalToast.vue'
 import { useStoreProvider } from 'hooks/store'
 import { usePathsSettings } from 'hooks/pathsSettings'
+import { folderCache } from 'hooks/folderCache'
+import { api } from 'scripts/comfyAPI'
 import GlobalConfirm from 'primevue/confirmdialog'
 import { $el, app, ComfyButton } from 'scripts/comfyAPI'
 import { onMounted, onUnmounted } from 'vue'
@@ -24,6 +26,27 @@ const { dialog, explorer } = useStoreProvider()
 
 // Initialize paths settings store
 usePathsSettings()
+
+/**
+ * Pre-cache folder structure on app load (Phase 1)
+ * This enables instant navigation before thumbnails are loaded
+ */
+const preCacheFolderStructure = async () => {
+  try {
+    const response = await api.fetchApi('/image-browsing/cache-folders', {
+      method: 'POST',
+    })
+    const data = await response.json()
+
+    if (data.success && data.data?.folder_data) {
+      const loaded = folderCache.bulkLoadFolderMetadata(data.data.folder_data)
+      console.log(`[ImageBrowsing] Pre-cached ${loaded} folder paths`)
+    }
+  } catch (error) {
+    // Silent fail - folder structure will be cached on-demand
+    console.warn('[ImageBrowsing] Folder pre-cache failed:', error)
+  }
+}
 
 const keyboardListener = ($event: KeyboardEvent) => {
   if ($event.key === 'Delete') {
@@ -41,6 +64,9 @@ const keyboardListener = ($event: KeyboardEvent) => {
 }
 
 onMounted(() => {
+  // Pre-cache folder structure in background (Phase 1 - fast)
+  preCacheFolderStructure()
+
   const openExplorerDialog = () => {
     explorer.refresh()
 

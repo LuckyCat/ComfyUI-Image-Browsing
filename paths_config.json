@@ -1,6 +1,6 @@
 {
   "thumbnail_cache": "X:\\ComfyUI_windows_portable_worker\\ComfyUI\\custom_nodes\\ComfyUI-Image-Browsing\\thumbnail_cache",
   "output": "X:\\ComfyUI_windows_portable\\ComfyUI\\output",
-  "workflows": "X:\\ComfyUI_windows_portable\\ComfyUI\\user\\default\\workflows",
+  "workflows": "X:\\ComfyUI_windows_portable_worker\\ComfyUI\\user\\default\\workflows",
   "prompts": "X:\\ComfyUI_windows_portable\\ComfyUI\\user\\default\\prompts"
 }

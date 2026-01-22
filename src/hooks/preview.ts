@@ -1,6 +1,7 @@
 import { defineStore } from 'hooks/store'
 import { DirectoryItem } from 'types/typings'
 import { computed, ref } from 'vue'
+import { signalUserActivity, cancelThumbnails } from 'hooks/thumbnailQueue'
 
 export const usePreview = defineStore('preview', (store) => {
   const visible = ref(false)
@@ -122,6 +123,10 @@ export const usePreview = defineStore('preview', (store) => {
   }
 
   const open = (item: DirectoryItem) => {
+    // Cancel ALL pending thumbnails and pause queue - preview takes absolute priority
+    cancelThumbnails()
+    signalUserActivity()
+
     visible.value = true
     current.value = item
     if (item.type === 'image' || item.type === 'video') {

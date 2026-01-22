@@ -180,6 +180,40 @@ class FolderCache {
       paths: Array.from(this.cache.keys()),
     }
   }
+
+  /**
+   * Bulk load folder metadata (from cache-folders endpoint)
+   * This pre-populates the cache with folder structure for instant navigation
+   * Note: These are placeholder entries without actual data - they only store metadata
+   */
+  bulkLoadFolderMetadata(folderData: Record<string, { file_count: number; has_subfolders: boolean; mtime: number }>) {
+    const now = Date.now()
+    let loaded = 0
+
+    for (const [path, metadata] of Object.entries(folderData)) {
+      // Don't overwrite existing entries that have actual data
+      if (!this.cache.has(path)) {
+        // Create a placeholder entry WITHOUT etag
+        // This ensures requestWithCache will fetch fresh data instead of using 304
+        const entry: CacheEntry<any> = {
+          data: null, // Placeholder - full data fetched on demand
+          etag: '',   // Empty etag - prevents If-None-Match header
+          timestamp: now,
+          path,
+        }
+        this.cache.set(path, entry)
+        this.accessOrder.push(path)
+        loaded++
+      }
+    }
+
+    // Save to localStorage
+    if (loaded > 0) {
+      this.saveToStorage()
+    }
+
+    return loaded
+  }
 }
 
 // Singleton instance

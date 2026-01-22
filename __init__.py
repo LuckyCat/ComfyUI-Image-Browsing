@@ -77,11 +77,17 @@ async def scan_output_folder(request):
         pathname = utils.get_output_pathname(pathname)
         filepath = utils.get_real_output_filepath(pathname)
 
+        # Signal user activity - this auto-pauses background caching
+        services.signal_user_activity()
+
         if os.path.isfile(filepath):
 
             preview_type = request.query.get("preview", None)
             if not preview_type:
-                # Full size file - cache forever with ETag validation
+                # Full size file - HIGHEST PRIORITY
+                # Signal preview mode to pause ALL background work
+                services.signal_preview_mode()
+
                 stat = os.stat(filepath)
                 etag = f'"{stat.st_mtime}-{stat.st_size}"'
 
@@ -153,6 +159,9 @@ async def scan_output_folder(request):
                 )
 
         elif os.path.isdir(filepath):
+            # Signal browsing mode - pauses cache-all to prioritize current folder
+            services.signal_browsing_mode()
+
             # Check ETag for conditional request (304 Not Modified)
             etag = get_folder_etag(filepath)
             if check_etag_match(request, etag):
@@ -387,6 +396,9 @@ async def create_new_prompt(request):
 async def batch_folder_request(request):
     """Fetch multiple folder contents in a single request"""
     try:
+        # Signal user activity - this auto-pauses background caching
+        services.signal_user_activity()
+
         data = await request.json()
         paths = data.get("paths", [])
         
@@ -524,27 +536,50 @@ async def merge_videos(request):
 
 
 
+@routes.post("/image-browsing/cache-folders")
+async def cache_folder_structure(request):
+    """
+    Phase 1: Cache folder structure only (fast).
+    This enables instant navigation while thumbnails load in background.
+    """
+    try:
+        result = await asyncio.to_thread(services.cache_folder_structure)
+
+        if "error" in result:
+            return web.json_response({"success": False, "error": result["error"]})
+
+        return json_response_compressed({
+            "success": True,
+            "data": {
+                "folders": result.get("folders", 0),
+                "files": result.get("files", 0),
+                "folder_data": result.get("folder_data", {})
+            }
+        })
+    except Exception as e:
+        error_msg = f"Folder cache failed: {str(e)}"
+        utils.print_error(error_msg)
+        return web.json_response({"success": False, "error": error_msg})
+
+
 @routes.post("/image-browsing/cache-all")
 async def cache_all_thumbnails(request):
-    """Start caching all thumbnails AND folder listings in background"""
+    """
+    Two-phase caching:
+    Phase 1: Cache folder structure (fast, enables navigation)
+    Phase 2: Generate thumbnails (slow, background)
+    """
     try:
         data = await request.json()
         max_size = data.get("max_size", 128)
         priority_folder = data.get("priority_folder", None)
-        cache_folders = data.get("cache_folders", True)  # NEW: cache folder listings too
 
-        # Start caching in background
-        async def cache_everything():
-            # Cache thumbnails
-            await asyncio.to_thread(services.cache_all_images, max_size, 4, priority_folder)
+        # Start two-phase caching in background
+        asyncio.create_task(asyncio.to_thread(
+            services.cache_all_images, max_size, 4, priority_folder
+        ))
 
-            # Also pre-cache folder listings if requested
-            if cache_folders:
-                await asyncio.to_thread(services.precache_all_folders)
-
-        asyncio.create_task(cache_everything())
-
-        return web.json_response({"success": True, "message": "Caching started"})
+        return web.json_response({"success": True, "message": "Two-phase caching started"})
     except Exception as e:
         error_msg = f"Cache failed: {str(e)}"
         utils.print_error(error_msg)
@@ -609,6 +644,16 @@ async def stop_caching(request):
         error_msg = f"Stop failed: {str(e)}"
         utils.print_error(error_msg)
         return web.json_response({"success": False, "error": error_msg})
+
+
+@routes.post("/image-browsing/signal-activity")
+async def signal_user_activity_endpoint(request):
+    """Signal user activity to pause background caching"""
+    try:
+        services.signal_user_activity()
+        return web.json_response({"success": True})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)})
 
 
 @routes.post("/image-browsing/cache-config")

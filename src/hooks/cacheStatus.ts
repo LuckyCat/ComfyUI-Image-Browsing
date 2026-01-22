@@ -4,7 +4,8 @@ import { ref, readonly } from 'vue'
 const cacheStatus = ref({
   is_running: false,
   is_paused: false,
-  phase: '',
+  auto_paused: false,  // Automatically paused due to user activity
+  phase: '',  // 'folders', 'folders_done', 'thumbnails', 'done'
   total: 0,
   processed: 0,
   skipped: 0,

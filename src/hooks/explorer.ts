@@ -1,13 +1,14 @@
-import { 
-  request, 
-  invalidateCache, 
-  invalidateCachePrefix, 
-  prefetchFolders, 
-  getCachedData, 
+import {
+  request,
+  invalidateCache,
+  invalidateCachePrefix,
+  prefetchFolders,
+  getCachedData,
   revalidateInBackground,
   optimisticRemove,
   cancelRequest,
 } from 'hooks/request'
+import { cancelThumbnails, signalUserActivity, setCurrentFolder } from 'hooks/thumbnailQueue'
 import { defineStore } from 'hooks/store'
 import { useToast } from 'hooks/toast'
 import { MenuItem } from 'primevue/menuitem'
@@ -957,10 +958,15 @@ export const useExplorer = defineStore('explorer', (store) => {
   const refresh = async () => {
     // Increment navigation ID to invalidate previous requests
     const navigationId = ++currentNavigationId
-    
+
+    // Set current folder for thumbnail priority - thumbnails from this folder come first
+    setCurrentFolder(currentPath.value)
+    // Signal user activity to pause background cache-all
+    signalUserActivity()
+
     selectedItems.value = []
     currentSelected.value = undefined
-    
+
     // Try to get from cache first (instant)
     const cachedData = getCachedData<any[]>(currentPath.value)
     

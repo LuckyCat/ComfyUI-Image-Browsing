@@ -63,10 +63,11 @@ export const requestWithCache = async (url: string, options?: RequestInit & { sk
     // Handle 304 Not Modified - return cached data
     if (response.status === 304) {
       const cached = folderCache.get(cacheKey)
-      if (cached) {
+      // Check that cached data actually exists (not a placeholder from bulkLoadFolderMetadata)
+      if (cached && cached.data !== null) {
         return { data: cached.data, fromCache: true }
       }
-      // Cache miss after 304 - shouldn't happen, but fallback to fresh request
+      // Cache miss or placeholder entry - fetch fresh data
       return requestWithCache(url, { ...options, skipCache: true })
     }
 

@@ -52,7 +52,7 @@
               <!-- Pause Button -->
               <Button
                 v-if="cacheStatus.is_running && !cacheStatus.is_paused"
-                :label="`${cacheProgress}%`"
+                :label="cacheButtonLabel"
                 icon="pi pi-pause"
                 severity="secondary"
                 size="small"
@@ -183,15 +183,47 @@ const newCacheSize = ref(20)
 let pollInterval: number | null = null
 
 const cacheProgress = computed(() => {
-  if (cacheStatus.value.total === 0) return 0
-  return Math.round((cacheStatus.value.processed / cacheStatus.value.total) * 100)
+  const status = cacheStatus.value
+
+  // Phase 1: Folder structure
+  if (status.phase === 'folders') {
+    if (status.folders_total === 0) return 0
+    return Math.round((status.folders_done / status.folders_total) * 100)
+  }
+
+  // Phase 2: Thumbnails
+  if (status.total === 0) return 0
+  return Math.round((status.processed / status.total) * 100)
+})
+
+const cacheButtonLabel = computed(() => {
+  const status = cacheStatus.value
+
+  if (status.phase === 'folders') {
+    return 'Folders...'
+  }
+  if (status.auto_paused) {
+    return `${cacheProgress.value}% ⏸`
+  }
+  return `${cacheProgress.value}%`
 })
 
 const cacheTooltip = computed(() => {
   const status = cacheStatus.value
-  if (status.phase === 'counting') {
-    return 'Counting files...'
+
+  // Phase-specific messages
+  if (status.phase === 'folders') {
+    return `Phase 1: Caching folder structure... ${status.folders_done}/${status.folders_total} folders`
   }
+  if (status.phase === 'folders_done') {
+    return `Folders cached. Starting thumbnails...`
+  }
+  if (status.phase === 'thumbnails') {
+    const skippedInfo = status.skipped > 0 ? ` (${status.skipped} cached)` : ''
+    const autoPauseInfo = status.auto_paused ? ' [Auto-paused]' : ''
+    return `Phase 2: ${status.processed}/${status.total}${skippedInfo}${autoPauseInfo} - ${status.current_file}`
+  }
+
   const skippedInfo = status.skipped > 0 ? ` (${status.skipped} cached)` : ''
   return `${status.processed}/${status.total}${skippedInfo} - ${status.current_file}`
 })

@@ -37,13 +37,13 @@ import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 const loadedImagesCache = new Set<string>()
 
 // Limit cache size to prevent memory issues
-const MAX_CACHE_SIZE = 500
+const MAX_CACHE_SIZE = 1000
 
 const addToCache = (src: string) => {
   if (loadedImagesCache.size >= MAX_CACHE_SIZE) {
-    // Remove oldest entries (first 100)
+    // Remove oldest entries (first 200)
     const entries = Array.from(loadedImagesCache)
-    entries.slice(0, 100).forEach(e => loadedImagesCache.delete(e))
+    entries.slice(0, 200).forEach(e => loadedImagesCache.delete(e))
   }
   loadedImagesCache.add(src)
 }
@@ -67,20 +67,13 @@ let observer: IntersectionObserver | null = null
 
 const loadImage = () => {
   if (!imgRef.value || !props.src) return
-  
+
   // If already loaded or same src, skip
   if (props.src === currentSrc.value && isLoaded.value) return
-  
+
   currentSrc.value = props.src
-  
-  // If image is in our cache, it's already in browser cache too - load immediately
-  if (isCached.value) {
-    imgRef.value.src = props.src
-    // Image should load from browser cache almost instantly
-    return
-  }
-  
-  // For new images, set src directly
+
+  // Simply set the src - browser will handle caching naturally
   imgRef.value.src = props.src
 }
 
@@ -107,7 +100,7 @@ onMounted(() => {
     }
     return
   }
-  
+
   observer = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
@@ -122,8 +115,8 @@ onMounted(() => {
       })
     },
     {
-      // Larger margin for earlier preloading
-      rootMargin: '300px',
+      // Load images when close to viewport
+      rootMargin: '200px',
       threshold: 0,
     }
   )

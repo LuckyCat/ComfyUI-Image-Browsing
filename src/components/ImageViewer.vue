@@ -17,7 +17,7 @@
     
     <img
       ref="imgRef"
-      :src="src"
+      :src="actualSrc"
       :alt="alt"
       class="absolute select-none"
       :class="{ 'opacity-0': isLoading }"
@@ -102,9 +102,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import Button from 'primevue/button'
 import Tooltip from 'primevue/tooltip'
+import { fetchHighPriority } from 'hooks/thumbnailQueue'
 
 const vTooltip = Tooltip
 
@@ -121,6 +122,43 @@ const props = withDefaults(defineProps<{
   showNavigation: false,
   hasPrev: false,
   hasNext: false,
+})
+
+// Use blob URL for high-priority loaded images
+const blobUrl = ref<string | null>(null)
+const actualSrc = computed(() => blobUrl.value || props.src)
+
+/**
+ * Load image with high priority, bypassing thumbnail queue
+ */
+const loadHighPriority = async (url: string) => {
+  try {
+    const response = await fetchHighPriority(url)
+    if (response.ok) {
+      const blob = await response.blob()
+      // Clean up previous blob
+      if (blobUrl.value) {
+        URL.revokeObjectURL(blobUrl.value)
+      }
+      blobUrl.value = URL.createObjectURL(blob)
+    }
+  } catch (error) {
+    // Fallback to normal loading via src attribute
+    console.warn('High priority fetch failed, using fallback:', error)
+  }
+}
+
+onMounted(() => {
+  if (props.src) {
+    loadHighPriority(props.src)
+  }
+})
+
+onUnmounted(() => {
+  // Clean up blob URL
+  if (blobUrl.value) {
+    URL.revokeObjectURL(blobUrl.value)
+  }
 })
 
 defineEmits<{
@@ -244,13 +282,24 @@ const onMouseUp = () => {
   isDragging.value = false
 }
 
-// Reset view when src changes
-watch(() => props.src, () => {
+// Reset view and load with high priority when src changes
+watch(() => props.src, (newSrc) => {
+  // Clean up previous blob
+  if (blobUrl.value) {
+    URL.revokeObjectURL(blobUrl.value)
+    blobUrl.value = null
+  }
+
   isLoading.value = true
   hasError.value = false
   scale.value = 1
   translateX.value = 0
   translateY.value = 0
+
+  // Load new image with high priority
+  if (newSrc) {
+    loadHighPriority(newSrc)
+  }
 })
 </script>
 

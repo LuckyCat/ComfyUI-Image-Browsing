@@ -361,7 +361,7 @@ import ResponseSelect from 'components/ResponseSelect.vue'
 import { useContainerQueries } from 'hooks/container'
 import { useExplorer } from 'hooks/explorer'
 import { useContainerResize } from 'hooks/resize'
-import { request } from 'hooks/request'
+import { request, invalidateCache } from 'hooks/request'
 import { useToast } from 'hooks/toast'
 import { useThumbnailSize, THUMBNAIL_SIZES } from 'hooks/thumbnailSize'
 import { chunk } from 'lodash'
@@ -552,16 +552,33 @@ const onMoveFiles = async (files: string[], targetFolder: string) => {
         target_folder: targetFolder,
       }),
     })
-    
+
     toast.add({
       severity: 'success',
       summary: 'Success',
       detail: `Moved ${files.length} item(s)`,
       life: 2000,
     })
-    
-    // Refresh current view
-    await refresh()
+
+    // Invalidate caches for source folders and target folder
+    const sourceFolders = new Set<string>()
+    for (const filePath of files) {
+      const parentFolder = filePath.substring(0, filePath.lastIndexOf('/'))
+      if (parentFolder) {
+        sourceFolders.add(parentFolder)
+      }
+    }
+
+    // Invalidate source folders
+    for (const folder of sourceFolders) {
+      invalidateCache(folder)
+    }
+
+    // Invalidate target folder
+    invalidateCache(targetFolder)
+
+    // Force refresh current view (bypasses cache)
+    await forceRefresh()
     // Await tree refresh to avoid leaving the tree in a half-reset state.
     await folderTreeRef.value?.refreshTree()
   } catch (err: any) {

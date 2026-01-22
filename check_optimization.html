@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ComfyUI Image Browsing - Optimization Check</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 { color: #333; margin-top: 0; }
+    h2 { color: #666; font-size: 18px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+    .check { margin: 10px 0; padding: 10px; background: #f9f9f9; border-radius: 4px; }
+    .status { font-weight: bold; margin-left: 10px; }
+    .ok { color: #22c55e; }
+    .error { color: #ef4444; }
+    .warning { color: #f59e0b; }
+    button {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 5px;
+    }
+    button:hover { background: #2563eb; }
+    button.danger { background: #ef4444; }
+    button.danger:hover { background: #dc2626; }
+    pre {
+      background: #f1f5f9;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 13px;
+    }
+    code { background: #e2e8f0; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>⚡ ComfyUI Image Browsing - Проверка оптимизации</h1>
+    <p>Эта страница поможет проверить что все оптимизации работают правильно.</p>
+  </div>
+
+  <div class="card">
+    <h2>1. Browser Support</h2>
+    <div id="browser-checks"></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Storage Check</h2>
+    <div id="storage-checks"></div>
+    <button onclick="checkStorage()">🔄 Обновить</button>
+    <button class="danger" onclick="clearStorage()">🗑️ Очистить все</button>
+  </div>
+
+  <div class="card">
+    <h2>3. Service Worker Status</h2>
+    <div id="sw-checks"></div>
+    <button onclick="checkServiceWorker()">🔄 Проверить SW</button>
+    <button class="danger" onclick="unregisterSW()">❌ Удалить SW</button>
+  </div>
+
+  <div class="card">
+    <h2>4. Cache Statistics</h2>
+    <div id="cache-stats"></div>
+    <button onclick="showCacheStats()">📊 Показать статистику</button>
+  </div>
+
+  <div class="card">
+    <h2>5. Quick Actions</h2>
+    <button onclick="testFetch()">🧪 Тест запроса</button>
+    <button onclick="showDiagnostics()">🔍 Диагностика</button>
+    <button class="danger" onclick="fullReset()">♻️ Полный сброс</button>
+  </div>
+
+  <div class="card" id="results" style="display:none;">
+    <h2>Результаты</h2>
+    <pre id="results-content"></pre>
+  </div>
+
+  <script>
+    // Browser support check
+    function checkBrowserSupport() {
+      const checks = [];
+
+      checks.push({
+        name: 'localStorage',
+        status: typeof(Storage) !== "undefined" && window.localStorage,
+        critical: true
+      });
+
+      checks.push({
+        name: 'Service Worker',
+        status: 'serviceWorker' in navigator,
+        critical: false
+      });
+
+      checks.push({
+        name: 'Fetch API',
+        status: 'fetch' in window,
+        critical: true
+      });
+
+      checks.push({
+        name: 'Promise',
+        status: typeof Promise !== 'undefined',
+        critical: true
+      });
+
+      checks.push({
+        name: 'Intersection Observer',
+        status: 'IntersectionObserver' in window,
+        critical: false
+      });
+
+      const html = checks.map(check => {
+        const statusClass = check.status ? 'ok' : (check.critical ? 'error' : 'warning');
+        const statusText = check.status ? '✅ OK' : '❌ Not supported';
+        return `<div class="check">
+          ${check.name}: <span class="status ${statusClass}">${statusText}</span>
+          ${!check.status && check.critical ? ' <strong>(Критично!)</strong>' : ''}
+        </div>`;
+      }).join('');
+
+      document.getElementById('browser-checks').innerHTML = html;
+    }
+
+    // Storage check
+    function checkStorage() {
+      const checks = [];
+
+      // localStorage
+      const folderCache = localStorage.getItem('folderCache');
+      checks.push({
+        name: 'Folder Cache',
+        value: folderCache ? `${Object.keys(JSON.parse(folderCache)).length} папок` : 'Пусто',
+        size: folderCache ? `${(folderCache.length / 1024).toFixed(2)} KB` : '0 KB'
+      });
+
+      const prefetchHistory = localStorage.getItem('prefetchHistory');
+      checks.push({
+        name: 'Prefetch History',
+        value: prefetchHistory ? `${JSON.parse(prefetchHistory).length} записей` : 'Пусто',
+        size: prefetchHistory ? `${(prefetchHistory.length / 1024).toFixed(2)} KB` : '0 KB'
+      });
+
+      // Total localStorage size
+      let totalSize = 0;
+      for (let key in localStorage) {
+        if (localStorage.hasOwnProperty(key)) {
+          totalSize += localStorage[key].length;
+        }
+      }
+
+      checks.push({
+        name: 'Total localStorage',
+        value: `${Object.keys(localStorage).length} ключей`,
+        size: `${(totalSize / 1024).toFixed(2)} KB / ~5000 KB`
+      });
+
+      const html = checks.map(check =>
+        `<div class="check">${check.name}: ${check.value} <span class="status">(${check.size})</span></div>`
+      ).join('');
+
+      document.getElementById('storage-checks').innerHTML = html;
+    }
+
+    function clearStorage() {
+      if (confirm('Очистить все кеши? Это удалит сохраненные данные.')) {
+        localStorage.clear();
+        sessionStorage.clear();
+        alert('Кеши очищены! Перезагрузите страницу.');
+        checkStorage();
+      }
+    }
+
+    // Service Worker check
+    async function checkServiceWorker() {
+      if (!('serviceWorker' in navigator)) {
+        document.getElementById('sw-checks').innerHTML =
+          '<div class="check"><span class="status warning">⚠️ Service Worker не поддерживается браузером</span></div>';
+        return;
+      }
+
+      try {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        const swReg = registrations.find(r => r.active?.scriptURL.includes('sw.js'));
+
+        if (swReg) {
+          document.getElementById('sw-checks').innerHTML = `
+            <div class="check">Status: <span class="status ok">✅ Активен</span></div>
+            <div class="check">Scope: ${swReg.scope}</div>
+            <div class="check">Script: ${swReg.active.scriptURL}</div>
+            <div class="check">State: ${swReg.active.state}</div>
+          `;
+        } else {
+          document.getElementById('sw-checks').innerHTML =
+            '<div class="check"><span class="status warning">⚠️ Service Worker не зарегистрирован</span></div>';
+        }
+      } catch (err) {
+        document.getElementById('sw-checks').innerHTML =
+          `<div class="check"><span class="status error">❌ Ошибка: ${err.message}</span></div>`;
+      }
+    }
+
+    async function unregisterSW() {
+      if (confirm('Удалить Service Worker?')) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const reg of registrations) {
+          await reg.unregister();
+        }
+        alert('Service Worker удален!');
+        checkServiceWorker();
+      }
+    }
+
+    // Cache stats
+    async function showCacheStats() {
+      const stats = {
+        folderCache: {},
+        swCache: {}
+      };
+
+      // Folder cache stats
+      const folderCache = localStorage.getItem('folderCache');
+      if (folderCache) {
+        const parsed = JSON.parse(folderCache);
+        stats.folderCache = {
+          entries: Object.keys(parsed).length,
+          paths: Object.keys(parsed).slice(0, 10)
+        };
+      }
+
+      // SW cache stats
+      if ('caches' in window) {
+        try {
+          const cacheNames = await caches.keys();
+          const cacheData = [];
+
+          for (const name of cacheNames) {
+            const cache = await caches.open(name);
+            const keys = await cache.keys();
+            cacheData.push({
+              name,
+              entries: keys.length
+            });
+          }
+
+          stats.swCache = cacheData;
+        } catch (err) {
+          stats.swCache = { error: err.message };
+        }
+      }
+
+      document.getElementById('cache-stats').innerHTML = `
+        <pre>${JSON.stringify(stats, null, 2)}</pre>
+      `;
+    }
+
+    // Test fetch
+    async function testFetch() {
+      const results = [];
+      const testUrl = '/image-browsing/output';
+
+      results.push('Testing fetch to: ' + testUrl);
+
+      try {
+        performance.mark('fetch-start');
+        const response = await fetch(testUrl);
+        performance.mark('fetch-end');
+        performance.measure('fetch', 'fetch-start', 'fetch-end');
+
+        const measure = performance.getEntriesByName('fetch')[0];
+
+        results.push('\\nStatus: ' + response.status);
+        results.push('Duration: ' + measure.duration.toFixed(2) + 'ms');
+        results.push('\\nHeaders:');
+        results.push('Cache-Control: ' + response.headers.get('Cache-Control'));
+        results.push('ETag: ' + response.headers.get('ETag'));
+        results.push('Content-Encoding: ' + response.headers.get('Content-Encoding'));
+
+      } catch (err) {
+        results.push('\\nError: ' + err.message);
+      }
+
+      showResults(results.join('\\n'));
+    }
+
+    // Diagnostics
+    function showDiagnostics() {
+      const info = {
+        userAgent: navigator.userAgent,
+        viewport: `${window.innerWidth}x${window.innerHeight}`,
+        localStorage: {
+          supported: typeof(Storage) !== "undefined",
+          size: calculateStorageSize()
+        },
+        serviceWorker: 'serviceWorker' in navigator,
+        online: navigator.onLine,
+        cookieEnabled: navigator.cookieEnabled
+      };
+
+      showResults(JSON.stringify(info, null, 2));
+    }
+
+    function calculateStorageSize() {
+      let total = 0;
+      for (let key in localStorage) {
+        if (localStorage.hasOwnProperty(key)) {
+          total += localStorage[key].length + key.length;
+        }
+      }
+      return `${(total / 1024).toFixed(2)} KB`;
+    }
+
+    // Full reset
+    async function fullReset() {
+      if (!confirm('Полный сброс? Это удалит ВСЕ кеши и перезагрузит страницу.')) {
+        return;
+      }
+
+      // Clear localStorage
+      localStorage.clear();
+      sessionStorage.clear();
+
+      // Unregister SW
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        for (const reg of regs) {
+          await reg.unregister();
+        }
+      }
+
+      // Clear caches
+      if ('caches' in window) {
+        const names = await caches.keys();
+        await Promise.all(names.map(name => caches.delete(name)));
+      }
+
+      alert('Все очищено! Перезагрузка...');
+      window.location.reload();
+    }
+
+    function showResults(text) {
+      document.getElementById('results').style.display = 'block';
+      document.getElementById('results-content').textContent = text;
+    }
+
+    // Initialize
+    checkBrowserSupport();
+    checkStorage();
+    checkServiceWorker();
+  </script>
+</body>
+</html>
